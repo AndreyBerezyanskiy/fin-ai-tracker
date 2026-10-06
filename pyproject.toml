@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "family-finance-tracker"
+version = "0.1.0"
+description = "Telegram-first family finance tracker"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.22,<4",
+    "alembic>=1.16,<2",
+    "apscheduler>=3.11,<4",
+    "openai>=2,<3",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.10,<3",
+    "sqlalchemy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.1,<2",
+    "ruff>=0.12,<1",
+]
+
+[project.scripts]
+family-finance-bot = "main:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["config", "main"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "SIM", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
