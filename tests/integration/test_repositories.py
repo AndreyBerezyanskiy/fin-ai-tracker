@@ -161,6 +161,9 @@ async def test_category_and_budget_crud(session: AsyncSession) -> None:
     available = await category_repository.list_available(
         household.id, transaction_type=TransactionType.EXPENSE
     )
+    income_categories = await category_repository.list_available(
+        household.id, transaction_type=TransactionType.INCOME
+    )
 
     budgets = BudgetRepository(session)
     budget = await budgets.upsert(
@@ -179,5 +182,6 @@ async def test_category_and_budget_crud(session: AsyncSession) -> None:
     )
 
     assert category in available
+    assert {item.code for item in income_categories} == {"salary", "other_income"}
     assert updated.id == budget.id
     assert updated.amount == Decimal("125.00")

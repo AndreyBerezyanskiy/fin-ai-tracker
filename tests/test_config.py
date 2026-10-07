@@ -21,6 +21,7 @@ def test_settings_are_loaded_and_normalized(settings_env: None) -> None:
     assert settings.log_level == "DEBUG"
     assert settings.allowed_chat_ids == frozenset({-1001234567890, 42})
     assert settings.sqlalchemy_database_url.startswith("postgresql+psycopg://")
+    assert settings.openai_model == "gpt-6-luna"
     assert "test-openai-key" not in repr(settings)
 
 

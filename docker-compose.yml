@@ -4,6 +4,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN
       - OPENAI_API_KEY
+      - OPENAI_MODEL
       - DATABASE_URL
       - ALLOWED_CHAT_IDS
       - APP_ENV

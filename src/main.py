@@ -2,13 +2,19 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from application.services import ReportService, TelegramBootstrapService
+from application.services import (
+    ReportService,
+    TelegramBootstrapService,
+    TransactionRecognitionService,
+)
 from bot.handlers import create_commands_router, handle_error
 from bot.middlewares import AllowedMessageMiddleware, UpdateLoggingMiddleware
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
+from infrastructure.openai import OpenAITransactionRecognizer
 
 
 def create_dispatcher(
@@ -31,6 +37,11 @@ def create_dispatcher(
             )
         )
         dispatcher["report_service"] = ReportService(session_factory)
+        openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+        dispatcher["transaction_recognition_service"] = TransactionRecognitionService(
+            session_factory,
+            OpenAITransactionRecognizer(openai_client, model=settings.openai_model),
+        )
 
     return dispatcher
 

@@ -9,7 +9,9 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import ErrorEvent, Message
 
-from application.services import PeriodTotals, ReportService
+from application.services import PeriodTotals, ReportService, TransactionRecognitionService
+from domain.enums import TransactionType
+from domain.models import RecognitionIntent, RecognitionResult
 from infrastructure.database import Household
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,7 @@ HELP_TEXT = """Доступні команди:
 /month — підсумок за поточний місяць
 /settings — налаштування групи
 
-Надсилання витрат і доходів звичайним текстом буде додано на наступному етапі.
+Надсилайте витрати й доходи звичайним текстом, наприклад: «кава 4,50».
 Щоб бот надалі бачив такі повідомлення, вимкніть Privacy Mode через @BotFather."""
 
 
@@ -93,8 +95,36 @@ async def settings_command(message: Message, household: Household) -> None:
     )
 
 
-async def ignore_plain_message(_message: Message) -> None:
-    """Bootstrap allowed members now; text recognition is implemented in a later stage."""
+def _format_recognition(result: RecognitionResult) -> str:
+    lines = ["Розпізнано (ще не збережено):"]
+    for transaction in result.transactions:
+        operation = "витрата" if transaction.type is TransactionType.EXPENSE else "дохід"
+        description = f" — {transaction.description}" if transaction.description else ""
+        lines.append(
+            f"• {operation}: {transaction.amount:.2f} {transaction.currency}, "
+            f"{transaction.category_code}, {transaction.transaction_date.isoformat()}"
+            f"{description}"
+        )
+    return "\n".join(lines)
+
+
+async def recognize_plain_message(
+    message: Message,
+    household: Household,
+    transaction_recognition_service: TransactionRecognitionService,
+) -> None:
+    if not message.text:
+        return
+    result = await transaction_recognition_service.recognize(
+        message=message.text,
+        household=household,
+    )
+    if result.intent is RecognitionIntent.NOT_A_TRANSACTION:
+        return
+    if result.needs_clarification:
+        await message.answer(result.clarification_question)
+        return
+    await message.answer(_format_recognition(result))
 
 
 async def handle_error(event: ErrorEvent) -> bool:
@@ -119,5 +149,5 @@ def create_commands_router() -> Router:
     router.message.register(today_command, Command("today"))
     router.message.register(month_command, Command("month"))
     router.message.register(settings_command, Command("settings"))
-    router.message.register(ignore_plain_message)
+    router.message.register(recognize_plain_message)
     return router

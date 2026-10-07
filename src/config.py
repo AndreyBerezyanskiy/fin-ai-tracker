@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = Field(min_length=1)
     database_url: SecretStr = Field(min_length=1)
     allowed_chat_ids_raw: str = Field(alias="ALLOWED_CHAT_IDS")
+    openai_model: str = "gpt-6-luna"
     app_env: AppEnvironment = "development"
     log_level: str = "INFO"
 

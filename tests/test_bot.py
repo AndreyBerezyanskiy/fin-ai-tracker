@@ -9,8 +9,15 @@ import pytest
 from aiogram.types import Chat, Message, Update, User
 
 from application.services import PeriodTotals, TelegramContext
-from bot.handlers.commands import help_command, settings_command, today_command
+from bot.handlers.commands import (
+    help_command,
+    recognize_plain_message,
+    settings_command,
+    today_command,
+)
 from bot.middlewares import AllowedMessageMiddleware, UpdateLoggingMiddleware
+from domain.enums import TransactionType
+from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
 from infrastructure.database import Household, Member
 
 
@@ -176,3 +183,57 @@ async def test_today_command_uses_deterministic_report_totals() -> None:
     assert "100.00 EUR" in answer
     assert "25.50 EUR" in answer
     assert "74.50 EUR" in answer
+
+
+@pytest.mark.asyncio
+async def test_plain_message_returns_recognized_transactions_in_ukrainian() -> None:
+    message = SimpleNamespace(text="кава 4,50", answer=AsyncMock())
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(
+            RecognizedTransaction(
+                type=TransactionType.EXPENSE,
+                amount=Decimal("4.50"),
+                currency="EUR",
+                category_code="cafes_restaurants",
+                description="Кава",
+                date="2026-10-07",
+            ),
+        ),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={"response_id": "resp_test"},
+    )
+    service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+
+    await recognize_plain_message(message, household, service)
+
+    service.recognize.assert_awaited_once_with(message="кава 4,50", household=household)
+    answer = message.answer.await_args.args[0]
+    assert "Розпізнано" in answer
+    assert "4.50 EUR" in answer
+
+
+@pytest.mark.asyncio
+async def test_plain_message_asks_clarification() -> None:
+    message = SimpleNamespace(text="купив продукти", answer=AsyncMock())
+    household = Household(id=1, telegram_chat_id=-100123, name="Сімейні фінанси")
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(),
+        needs_clarification=True,
+        clarification_question="Не вдалося визначити суму. Скільки коштувала покупка?",
+        ai_metadata={},
+    )
+    service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+
+    await recognize_plain_message(message, household, service)
+
+    message.answer.assert_awaited_once_with(result.clarification_question)

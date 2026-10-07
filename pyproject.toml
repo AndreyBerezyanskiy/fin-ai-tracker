@@ -41,7 +41,10 @@ addopts = "-ra"
 asyncio_mode = "auto"
 pythonpath = ["src"]
 testpaths = ["tests"]
-markers = ["integration: requires a disposable PostgreSQL database"]
+markers = [
+    "integration: requires a disposable PostgreSQL database",
+    "manual: may call external services and is not part of the unit suite",
+]
 
 [tool.ruff]
 line-length = 100
