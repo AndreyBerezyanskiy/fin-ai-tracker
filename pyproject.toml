@@ -16,7 +16,7 @@ dependencies = [
     "psycopg[binary]>=3.2,<4",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",
-    "sqlalchemy>=2.0,<3",
+    "sqlalchemy[asyncio]>=2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +41,7 @@ addopts = "-ra"
 asyncio_mode = "auto"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = ["integration: requires a disposable PostgreSQL database"]
 
 [tool.ruff]
 line-length = 100

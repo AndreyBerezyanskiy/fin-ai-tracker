@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncIterator, Iterator
+from datetime import date
+from decimal import Decimal
+
+import pytest
+import pytest_asyncio
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from domain.enums import TransactionStatus, TransactionType
+from infrastructure.database import Category, Transaction, create_engine, create_session_factory
+from infrastructure.repositories import (
+    BudgetRepository,
+    CategoryRepository,
+    HouseholdRepository,
+    MemberRepository,
+    TransactionRepository,
+)
+
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not TEST_DATABASE_URL,
+        reason="set TEST_DATABASE_URL to a disposable PostgreSQL database",
+    ),
+]
+
+
+@pytest.fixture(scope="session")
+def migrated_database() -> Iterator[str]:
+    assert TEST_DATABASE_URL is not None
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
+    command.upgrade(config, "head")
+    yield TEST_DATABASE_URL
+    command.downgrade(config, "base")
+
+
+@pytest_asyncio.fixture
+async def session(migrated_database: str) -> AsyncIterator[AsyncSession]:
+    engine = create_engine(migrated_database)
+    connection = await engine.connect()
+    transaction = await connection.begin()
+    factory = create_session_factory(engine)
+    async with factory(bind=connection) as db_session:
+        yield db_session
+    await transaction.rollback()
+    await connection.close()
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_household_and_member_are_created_idempotently(session: AsyncSession) -> None:
+    households = HouseholdRepository(session)
+    household = await households.get_or_create(telegram_chat_id=-100123, name="Сім'я")
+    same_household = await households.get_or_create(telegram_chat_id=-100123, name="Інша назва")
+
+    members = MemberRepository(session)
+    member = await members.get_or_create(
+        household_id=household.id,
+        telegram_user_id=42,
+        display_name="Олена",
+        username="olena",
+    )
+    same_member = await members.get_or_create(
+        household_id=household.id,
+        telegram_user_id=42,
+        display_name="Олена Нова",
+        username="olena_new",
+    )
+
+    assert same_household.id == household.id
+    assert same_member.id == member.id
+    assert same_member.display_name == "Олена Нова"
+    assert household.currency == "EUR"
+    assert household.timezone == "Europe/Paris"
+
+
+@pytest.mark.asyncio
+async def test_transaction_insert_is_decimal_and_idempotent(session: AsyncSession) -> None:
+    household = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100456, name="Сім'я"
+    )
+    member = await MemberRepository(session).get_or_create(
+        household_id=household.id,
+        telegram_user_id=43,
+        display_name="Андрій",
+    )
+    category = await session.scalar(select(Category).where(Category.code == "groceries"))
+    assert category is not None
+
+    repository = TransactionRepository(session)
+    parameters = {
+        "household_id": household.id,
+        "member_id": member.id,
+        "category_id": category.id,
+        "transaction_type": TransactionType.EXPENSE,
+        "amount": Decimal("12.34"),
+        "currency": "EUR",
+        "description": "Продукти",
+        "transaction_date": date(2026, 10, 6),
+        "original_text": "продукти 12,34",
+        "telegram_chat_id": household.telegram_chat_id,
+        "telegram_message_id": 777,
+        "ai_metadata": {"model": "test"},
+    }
+    first = await repository.create_idempotent(**parameters)
+    duplicate = await repository.create_idempotent(**parameters)
+
+    count = await session.scalar(select(func.count()).select_from(Transaction))
+    assert first.created is True
+    assert duplicate.created is False
+    assert duplicate.transaction.id == first.transaction.id
+    assert first.transaction.amount == Decimal("12.34")
+    assert first.transaction.status is TransactionStatus.PENDING
+    assert count == 1
+
+    await repository.set_status(first.transaction, TransactionStatus.CONFIRMED)
+    assert first.transaction.status is TransactionStatus.CONFIRMED
+
+
+@pytest.mark.asyncio
+async def test_category_and_budget_crud(session: AsyncSession) -> None:
+    household = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100789, name="Сім'я"
+    )
+    category_repository = CategoryRepository(session)
+    category = await category_repository.create(
+        household_id=household.id,
+        code="pets",
+        name="Домашні тварини",
+        transaction_type=TransactionType.EXPENSE,
+    )
+    available = await category_repository.list_available(
+        household.id, transaction_type=TransactionType.EXPENSE
+    )
+
+    budgets = BudgetRepository(session)
+    budget = await budgets.upsert(
+        household_id=household.id,
+        year=2026,
+        month=10,
+        category_id=category.id,
+        amount=Decimal("100.00"),
+    )
+    updated = await budgets.upsert(
+        household_id=household.id,
+        year=2026,
+        month=10,
+        category_id=category.id,
+        amount=Decimal("125.00"),
+    )
+
+    assert category in available
+    assert updated.id == budget.id
+    assert updated.amount == Decimal("125.00")

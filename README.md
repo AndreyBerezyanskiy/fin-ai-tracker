@@ -48,10 +48,26 @@ ruff format .
 ## Міграції
 
 ```bash
-alembic revision --autogenerate -m "опис зміни"
+# Створити або оновити чисту базу до актуальної схеми однією командою:
 alembic upgrade head
+
+# Команди для подальшої розробки міграцій:
+alembic revision --autogenerate -m "опис зміни"
 alembic downgrade -1
 ```
+
+Міграція також створює стартові системні категорії витрат. Усі timestamps зберігаються
+як PostgreSQL `TIMESTAMP WITH TIME ZONE`; застосунок встановлює UTC для кожного з'єднання.
+
+Інтеграційні CRUD-тести потребують окремої порожньої/одноразової PostgreSQL-бази. Вони
+застосовують міграції перед тестами та відкочують їх після завершення:
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://finance:password@localhost:5432/finance_test \
+  pytest -m integration
+```
+
+Без `TEST_DATABASE_URL` інтеграційні тести безпечно пропускаються.
 
 ## Docker
 
