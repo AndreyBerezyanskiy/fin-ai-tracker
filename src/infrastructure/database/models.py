@@ -84,6 +84,12 @@ class Member(TimestampMixin, Base):
     transactions: Mapped[list[Transaction]] = relationship(back_populates="member")
 
 
+class ProcessedTelegramUpdate(Base):
+    __tablename__ = "processed_telegram_updates"
+
+    update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+
+
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
@@ -203,4 +209,11 @@ class Budget(TimestampMixin, Base):
     category: Mapped[Category | None] = relationship(back_populates="budgets")
 
 
-__all__ = ["Budget", "Category", "Household", "Member", "Transaction"]
+__all__ = [
+    "Budget",
+    "Category",
+    "Household",
+    "Member",
+    "ProcessedTelegramUpdate",
+    "Transaction",
+]

@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,15 +8,15 @@ import main
 from config import Settings
 
 
-def test_dispatcher_can_be_created_without_handlers() -> None:
+def test_dispatcher_registers_message_handlers() -> None:
     dispatcher = main.create_dispatcher()
 
     assert isinstance(dispatcher, Dispatcher)
-    assert dispatcher.resolve_used_update_types() == []
+    assert dispatcher.resolve_used_update_types() == ["message"]
 
 
 @pytest.mark.asyncio
-async def test_bot_startup_reaches_long_polling_without_handlers(
+async def test_bot_startup_reaches_long_polling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
@@ -28,8 +29,12 @@ async def test_bot_startup_reaches_long_polling_without_handlers(
     dispatcher = main.create_dispatcher()
     start_polling = AsyncMock()
     monkeypatch.setattr(dispatcher, "start_polling", start_polling)
-    monkeypatch.setattr(main, "create_dispatcher", lambda: dispatcher)
+    monkeypatch.setattr(main, "create_dispatcher", lambda **_kwargs: dispatcher)
+    engine = SimpleNamespace(dispose=AsyncMock())
+    monkeypatch.setattr(main, "create_engine", lambda _url: engine)
+    monkeypatch.setattr(main, "create_session_factory", lambda _engine: object())
 
     await main.start_bot(settings)
 
     start_polling.assert_awaited_once()
+    engine.dispose.assert_awaited_once()

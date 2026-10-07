@@ -6,6 +6,7 @@ from infrastructure.repositories.repositories import (
     HouseholdRepository,
     InvalidTransactionReferenceError,
     MemberRepository,
+    ProcessedTelegramUpdateRepository,
     TransactionCreateResult,
     TransactionRepository,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "HouseholdRepository",
     "InvalidTransactionReferenceError",
     "MemberRepository",
+    "ProcessedTelegramUpdateRepository",
     "TransactionCreateResult",
     "TransactionRepository",
 ]

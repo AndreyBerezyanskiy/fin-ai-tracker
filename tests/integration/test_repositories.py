@@ -13,12 +13,19 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.enums import TransactionStatus, TransactionType
-from infrastructure.database import Category, Transaction, create_engine, create_session_factory
+from infrastructure.database import (
+    Category,
+    ProcessedTelegramUpdate,
+    Transaction,
+    create_engine,
+    create_session_factory,
+)
 from infrastructure.repositories import (
     BudgetRepository,
     CategoryRepository,
     HouseholdRepository,
     MemberRepository,
+    ProcessedTelegramUpdateRepository,
     TransactionRepository,
 )
 
@@ -80,6 +87,20 @@ async def test_household_and_member_are_created_idempotently(session: AsyncSessi
     assert same_member.display_name == "Олена Нова"
     assert household.currency == "EUR"
     assert household.timezone == "Europe/Paris"
+
+
+@pytest.mark.asyncio
+async def test_telegram_update_is_claimed_once_and_can_be_released(session: AsyncSession) -> None:
+    repository = ProcessedTelegramUpdateRepository(session)
+
+    assert await repository.claim(12345) is True
+    assert await repository.claim(12345) is False
+
+    await repository.release(12345)
+    await session.flush()
+
+    assert await session.get(ProcessedTelegramUpdate, 12345) is None
+    assert await repository.claim(12345) is True
 
 
 @pytest.mark.asyncio

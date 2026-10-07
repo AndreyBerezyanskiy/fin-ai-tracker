@@ -5,12 +5,19 @@ from datetime import date, time
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.enums import TransactionStatus, TransactionType
-from infrastructure.database.models import Budget, Category, Household, Member, Transaction
+from infrastructure.database.models import (
+    Budget,
+    Category,
+    Household,
+    Member,
+    ProcessedTelegramUpdate,
+    Transaction,
+)
 
 
 class InvalidTransactionReferenceError(ValueError):
@@ -129,6 +136,25 @@ class MemberRepository:
         member.is_active = is_active
         await self.session.flush()
         return member
+
+
+class ProcessedTelegramUpdateRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def claim(self, update_id: int) -> bool:
+        statement = (
+            insert(ProcessedTelegramUpdate)
+            .values(update_id=update_id)
+            .on_conflict_do_nothing(index_elements=[ProcessedTelegramUpdate.update_id])
+            .returning(ProcessedTelegramUpdate.update_id)
+        )
+        return (await self.session.scalar(statement)) is not None
+
+    async def release(self, update_id: int) -> None:
+        await self.session.execute(
+            delete(ProcessedTelegramUpdate).where(ProcessedTelegramUpdate.update_id == update_id)
+        )
 
 
 class CategoryRepository:
