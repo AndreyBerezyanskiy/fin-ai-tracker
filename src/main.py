@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.services import (
+    AdviceService,
     BudgetService,
     CategoryService,
     HouseholdSettingsService,
@@ -23,7 +24,7 @@ from bot.middlewares import (
 )
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
-from infrastructure.openai import OpenAITransactionRecognizer
+from infrastructure.openai import OpenAIAdviceGenerator, OpenAITransactionRecognizer
 
 
 def create_dispatcher(
@@ -54,12 +55,19 @@ def create_dispatcher(
                 bootstrap_service=bootstrap_service,
             )
         )
-        dispatcher["report_service"] = ReportService(session_factory)
-        dispatcher["budget_service"] = BudgetService(session_factory)
+        report_service = ReportService(session_factory)
+        budget_service = BudgetService(session_factory)
+        dispatcher["report_service"] = report_service
+        dispatcher["budget_service"] = budget_service
         dispatcher["category_service"] = CategoryService(session_factory)
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
         openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+        dispatcher["advice_service"] = AdviceService(
+            report_service,
+            budget_service,
+            OpenAIAdviceGenerator(openai_client, model=settings.openai_model),
+        )
         dispatcher["transaction_recognition_service"] = TransactionRecognitionService(
             session_factory,
             OpenAITransactionRecognizer(openai_client, model=settings.openai_model),
@@ -75,6 +83,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="today", description="Підсумок за сьогодні"),
             BotCommand(command="month", description="Підсумок за місяць"),
             BotCommand(command="budget", description="Стан бюджетів і лімітів"),
+            BotCommand(command="advice", description="Короткі спостереження про бюджет"),
             BotCommand(command="set_budget", description="Встановити місячний бюджет"),
             BotCommand(command="set_category_budget", description="Встановити ліміт категорії"),
             BotCommand(command="last", description="Останні операції"),

@@ -1,5 +1,6 @@
 """Domain models."""
 
+from domain.models.advice import AIAdviceResponse
 from domain.models.recognition import (
     AIRecognitionResponse,
     AITransactionCandidate,
@@ -11,6 +12,7 @@ from domain.models.recognition import (
 )
 
 __all__ = [
+    "AIAdviceResponse",
     "AIRecognitionResponse",
     "AITransactionCandidate",
     "CategoryDefinition",

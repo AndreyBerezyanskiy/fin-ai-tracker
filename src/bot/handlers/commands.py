@@ -11,6 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReactionTypeEmoji
 
 from application.services import (
+    AdviceService,
     BudgetService,
     BudgetStatus,
     CategoryService,
@@ -38,6 +39,7 @@ HELP_TEXT = """Доступні команди:
 /today — підсумок за сьогодні
 /month — підсумок за поточний місяць
 /budget — стан загального й категорійних бюджетів
+/advice — короткі спостереження на основі місячного звіту
 /set_budget 2000 — встановити бюджет на поточний місяць
 /set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
@@ -262,6 +264,25 @@ async def budget_command(
         today=_today(household),
     )
     await message.answer(_budget_text(status, household.currency))
+
+
+async def advice_command(
+    message: Message,
+    household: Household,
+    advice_service: AdviceService,
+) -> None:
+    try:
+        observations = await advice_service.generate(
+            household_id=household.id,
+            currency=household.currency,
+            today=_today(household),
+        )
+    except ValueError:
+        logger.warning("AI advice failed server validation: household_id=%s", household.id)
+        await message.answer("Не вдалося сформувати надійну пораду. Спробуйте ще раз пізніше.")
+        return
+    text = "Короткі спостереження:\n" + "\n".join(f"• {item}" for item in observations)
+    await message.answer(text)
 
 
 async def settings_command(message: Message, household: Household) -> None:
@@ -659,6 +680,7 @@ def create_commands_router() -> Router:
     router.message.register(today_command, Command("today"))
     router.message.register(month_command, Command("month"))
     router.message.register(budget_command, Command("budget"))
+    router.message.register(advice_command, Command("advice"))
     router.message.register(set_budget_command, Command("set_budget"))
     router.message.register(set_category_budget_command, Command("set_category_budget"))
     router.message.register(last_command, Command("last"))

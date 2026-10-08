@@ -48,4 +48,10 @@ async def test_bot_commands_are_registered() -> None:
 
     commands = bot.set_my_commands.await_args.args[0]
     assert commands[0].command == "menu"
-    assert {item.command for item in commands} >= {"today", "stats", "categories", "undo"}
+    assert {item.command for item in commands} >= {
+        "today",
+        "stats",
+        "categories",
+        "undo",
+        "advice",
+    }
