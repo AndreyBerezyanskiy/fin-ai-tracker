@@ -9,16 +9,19 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from application.services import CategoryService, HouseholdSettingsService, TransactionService
 from domain.enums import TransactionStatus, TransactionType
+from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
 from infrastructure.database import (
     Category,
     ProcessedTelegramUpdate,
     Transaction,
     create_engine,
     create_session_factory,
+    session_scope,
 )
 from infrastructure.repositories import (
     BudgetRepository,
@@ -60,6 +63,24 @@ async def session(migrated_database: str) -> AsyncIterator[AsyncSession]:
     await transaction.rollback()
     await connection.close()
     await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def service_session_factory(
+    migrated_database: str,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    engine = create_engine(migrated_database)
+    factory = create_session_factory(engine)
+    async with session_scope(factory) as db_session:
+        await db_session.execute(delete(Transaction).where(Transaction.telegram_chat_id == -100999))
+    try:
+        yield factory
+    finally:
+        async with session_scope(factory) as db_session:
+            await db_session.execute(
+                delete(Transaction).where(Transaction.telegram_chat_id == -100999)
+            )
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -185,3 +206,125 @@ async def test_category_and_budget_crud(session: AsyncSession) -> None:
     assert {item.code for item in income_categories} == {"salary", "other_income"}
     assert updated.id == budget.id
     assert updated.amount == Decimal("125.00")
+
+
+@pytest.mark.asyncio
+async def test_pending_batch_confirm_last_and_undo_flow(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    factory = service_session_factory
+    async with session_scope(factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100999, name="Flow test"
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=99,
+            display_name="Тест",
+        )
+        beneficiary = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=100,
+            display_name="Олена",
+        )
+
+    recognition = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(
+            RecognizedTransaction(
+                type=TransactionType.EXPENSE,
+                amount=Decimal("18.00"),
+                currency="EUR",
+                category_code="health",
+                description="Аптека",
+                beneficiary_member_id=beneficiary.id,
+                date="2026-10-07",
+            ),
+            RecognizedTransaction(
+                type=TransactionType.EXPENSE,
+                amount=Decimal("12.00"),
+                currency="EUR",
+                category_code="groceries",
+                description="Продукти",
+                date="2026-10-07",
+            ),
+        ),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={"response_id": "resp_flow"},
+    )
+    service = TransactionService(factory)
+
+    first = await service.create_pending(
+        household=household,
+        member=member,
+        telegram_message_id=555,
+        original_text="аптека 18 і продукти 12",
+        recognition=recognition,
+    )
+    duplicate = await service.create_pending(
+        household=household,
+        member=member,
+        telegram_message_id=555,
+        original_text="аптека 18 і продукти 12",
+        recognition=recognition,
+    )
+
+    assert len(first) == 2
+    assert [item.beneficiary_member_id for item in first] == [beneficiary.id, member.id]
+    assert [item.id for item in duplicate] == [item.id for item in first]
+    assert all(item.status is TransactionStatus.PENDING for item in first)
+
+    confirmed = await service.transition_pending(
+        household_id=household.id,
+        telegram_message_id=555,
+        status=TransactionStatus.CONFIRMED,
+    )
+    repeated = await service.transition_pending(
+        household_id=household.id,
+        telegram_message_id=555,
+        status=TransactionStatus.CANCELLED,
+    )
+
+    assert confirmed.changed is True
+    assert all(item.status is TransactionStatus.CONFIRMED for item in confirmed.transactions)
+    assert repeated.changed is False
+    assert len(await service.list_recent(household_id=household.id)) == 2
+    assert await service.confirmed_balance(household_id=household.id) == Decimal("-30.00")
+
+    category_service = CategoryService(factory)
+    renamed = await category_service.rename(
+        household_id=household.id,
+        code="health",
+        name="Медицина",
+    )
+    assert renamed is not None
+    statistics = await category_service.statistics(
+        household_id=household.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+    )
+    assert {(item.name, item.amount) for item in statistics} == {
+        ("Медицина", Decimal("18.00")),
+        ("Продукти", Decimal("12.00")),
+    }
+    hidden = await category_service.set_active(
+        household_id=household.id,
+        code="health",
+        is_active=False,
+    )
+    assert hidden is not None and hidden.is_active is False
+
+    settings_service = HouseholdSettingsService(factory)
+    updated_household = await settings_service.set_timezone(
+        household_id=household.id, timezone="Europe/Kyiv"
+    )
+    assert updated_household.timezone == "Europe/Kyiv"
+    toggled_household = await settings_service.toggle_reports(household.id)
+    assert toggled_household.reports_enabled is False
+
+    undone = await service.undo_last(household_id=household.id, member_id=member.id)
+    assert undone is not None
+    assert undone.status is TransactionStatus.CANCELLED
+    assert len(await service.list_recent(household_id=household.id)) == 1
+    assert await service.confirmed_balance(household_id=household.id) == Decimal("-18.00")

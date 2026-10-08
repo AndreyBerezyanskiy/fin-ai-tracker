@@ -3,6 +3,7 @@
 from infrastructure.repositories.repositories import (
     BudgetRepository,
     CategoryRepository,
+    CategoryTotal,
     HouseholdRepository,
     InvalidTransactionReferenceError,
     MemberRepository,
@@ -13,6 +14,7 @@ from infrastructure.repositories.repositories import (
 
 __all__ = [
     "BudgetRepository",
+    "CategoryTotal",
     "CategoryRepository",
     "HouseholdRepository",
     "InvalidTransactionReferenceError",

@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from domain.enums import TransactionStatus, TransactionType
 from infrastructure.database.models import (
@@ -28,6 +29,13 @@ class InvalidTransactionReferenceError(ValueError):
 class TransactionCreateResult:
     transaction: Transaction
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryTotal:
+    code: str
+    type: TransactionType
+    amount: Decimal
 
 
 class HouseholdRepository:
@@ -137,6 +145,15 @@ class MemberRepository:
         await self.session.flush()
         return member
 
+    async def list_active(self, household_id: int) -> list[Member]:
+        return list(
+            await self.session.scalars(
+                select(Member)
+                .where(Member.household_id == household_id, Member.is_active.is_(True))
+                .order_by(Member.display_name, Member.id)
+            )
+        )
+
 
 class ProcessedTelegramUpdateRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -167,14 +184,27 @@ class CategoryRepository:
     async def list_available(
         self, household_id: int, *, transaction_type: TransactionType | None = None
     ) -> list[Category]:
+        categories = await self.list_for_management(household_id)
+        return [
+            category
+            for category in categories
+            if category.is_active
+            and (transaction_type is None or category.type is transaction_type)
+        ]
+
+    async def list_for_management(self, household_id: int) -> list[Category]:
         statement = select(Category).where(
-            Category.is_active.is_(True),
-            (Category.household_id.is_(None) | (Category.household_id == household_id)),
+            Category.household_id.is_(None) | (Category.household_id == household_id)
         )
-        if transaction_type is not None:
-            statement = statement.where(Category.type == transaction_type)
-        statement = statement.order_by(Category.name)
-        return list(await self.session.scalars(statement))
+        categories = list(await self.session.scalars(statement))
+        effective: dict[str, Category] = {}
+        for category in sorted(categories, key=lambda item: item.household_id is not None):
+            effective[category.code] = category
+        return sorted(effective.values(), key=lambda item: (item.type.value, item.name.casefold()))
+
+    async def get_effective_by_code(self, household_id: int, code: str) -> Category | None:
+        categories = await self.list_for_management(household_id)
+        return next((category for category in categories if category.code == code), None)
 
     async def create(
         self,
@@ -194,6 +224,44 @@ class CategoryRepository:
         await self.session.flush()
         return category
 
+    async def rename_effective(self, *, household_id: int, code: str, name: str) -> Category | None:
+        category = await self.get_effective_by_code(household_id, code)
+        if category is None:
+            return None
+        if category.household_id == household_id:
+            category.name = name
+        else:
+            category = Category(
+                household_id=household_id,
+                code=category.code,
+                name=name,
+                type=category.type,
+                is_active=category.is_active,
+            )
+            self.session.add(category)
+        await self.session.flush()
+        return category
+
+    async def set_effective_active(
+        self, *, household_id: int, code: str, is_active: bool
+    ) -> Category | None:
+        category = await self.get_effective_by_code(household_id, code)
+        if category is None:
+            return None
+        if category.household_id == household_id:
+            category.is_active = is_active
+        else:
+            category = Category(
+                household_id=household_id,
+                code=category.code,
+                name=category.name,
+                type=category.type,
+                is_active=is_active,
+            )
+            self.session.add(category)
+        await self.session.flush()
+        return category
+
 
 class TransactionRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -204,19 +272,40 @@ class TransactionRepository:
 
     async def get_by_telegram_message(
         self, telegram_chat_id: int, telegram_message_id: int
-    ) -> Transaction | None:
-        return await self.session.scalar(
-            select(Transaction).where(
-                Transaction.telegram_chat_id == telegram_chat_id,
-                Transaction.telegram_message_id == telegram_message_id,
+    ) -> list[Transaction]:
+        return list(
+            await self.session.scalars(
+                select(Transaction)
+                .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+                .where(
+                    Transaction.telegram_chat_id == telegram_chat_id,
+                    Transaction.telegram_message_id == telegram_message_id,
+                )
+                .order_by(Transaction.message_transaction_index)
             )
         )
+
+    async def lock_by_telegram_message(
+        self, *, household_id: int, telegram_message_id: int
+    ) -> list[Transaction]:
+        statement = (
+            select(Transaction)
+            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.telegram_message_id == telegram_message_id,
+            )
+            .order_by(Transaction.message_transaction_index)
+            .with_for_update()
+        )
+        return list(await self.session.scalars(statement))
 
     async def create_idempotent(
         self,
         *,
         household_id: int,
         member_id: int,
+        beneficiary_member_id: int | None = None,
         category_id: int,
         transaction_type: TransactionType,
         amount: Decimal,
@@ -226,12 +315,14 @@ class TransactionRepository:
         original_text: str,
         telegram_chat_id: int,
         telegram_message_id: int,
+        message_transaction_index: int = 0,
         status: TransactionStatus = TransactionStatus.PENDING,
         ai_metadata: dict[str, Any] | None = None,
     ) -> TransactionCreateResult:
         await self._validate_references(
             household_id=household_id,
             member_id=member_id,
+            beneficiary_member_id=beneficiary_member_id or member_id,
             category_id=category_id,
             transaction_type=transaction_type,
             telegram_chat_id=telegram_chat_id,
@@ -241,6 +332,7 @@ class TransactionRepository:
             .values(
                 household_id=household_id,
                 member_id=member_id,
+                beneficiary_member_id=beneficiary_member_id or member_id,
                 category_id=category_id,
                 type=transaction_type,
                 amount=amount,
@@ -250,20 +342,95 @@ class TransactionRepository:
                 original_text=original_text,
                 telegram_chat_id=telegram_chat_id,
                 telegram_message_id=telegram_message_id,
+                message_transaction_index=message_transaction_index,
                 status=status,
                 ai_metadata=ai_metadata or {},
             )
-            .on_conflict_do_nothing(constraint="uq_transactions_telegram_message")
+            .on_conflict_do_nothing(constraint="uq_transactions_telegram_message_item")
             .returning(Transaction)
         )
         transaction = (await self.session.scalars(statement)).one_or_none()
         if transaction is not None:
             return TransactionCreateResult(transaction=transaction, created=True)
 
-        existing = await self.get_by_telegram_message(telegram_chat_id, telegram_message_id)
+        existing = await self.session.scalar(
+            select(Transaction).where(
+                Transaction.telegram_chat_id == telegram_chat_id,
+                Transaction.telegram_message_id == telegram_message_id,
+                Transaction.message_transaction_index == message_transaction_index,
+            )
+        )
         if existing is None:  # Defensive: conflict target should make this unreachable.
             raise RuntimeError("transaction conflict occurred but row was not found")
         return TransactionCreateResult(transaction=existing, created=False)
+
+    async def list_recent_confirmed(
+        self, household_id: int, *, limit: int = 5
+    ) -> list[Transaction]:
+        statement = (
+            select(Transaction)
+            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+            )
+            .order_by(Transaction.updated_at.desc(), Transaction.id.desc())
+            .limit(limit)
+        )
+        return list(await self.session.scalars(statement))
+
+    async def confirmed_balance(self, household_id: int) -> Decimal:
+        statement = (
+            select(Transaction.type, func.sum(Transaction.amount))
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+            )
+            .group_by(Transaction.type)
+        )
+        amounts = dict((await self.session.execute(statement)).all())
+        return amounts.get(TransactionType.INCOME, Decimal("0.00")) - amounts.get(
+            TransactionType.EXPENSE, Decimal("0.00")
+        )
+
+    async def category_totals(
+        self, *, household_id: int, start_date: date, end_date: date
+    ) -> list[CategoryTotal]:
+        statement = (
+            select(Category.code, Transaction.type, func.sum(Transaction.amount))
+            .join(Category, Category.id == Transaction.category_id)
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date < end_date,
+            )
+            .group_by(Category.code, Transaction.type)
+            .order_by(Transaction.type, func.sum(Transaction.amount).desc())
+        )
+        rows = await self.session.execute(statement)
+        return [
+            CategoryTotal(code, transaction_type, amount) for code, transaction_type, amount in rows
+        ]
+
+    async def cancel_last_confirmed(
+        self, *, household_id: int, member_id: int
+    ) -> Transaction | None:
+        transaction = await self.session.scalar(
+            select(Transaction)
+            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.member_id == member_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+            )
+            .order_by(Transaction.updated_at.desc(), Transaction.id.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if transaction is None:
+            return None
+        return await self.set_status(transaction, TransactionStatus.CANCELLED)
 
     async def set_status(self, transaction: Transaction, status: TransactionStatus) -> Transaction:
         transaction.status = status
@@ -275,17 +442,21 @@ class TransactionRepository:
         *,
         household_id: int,
         member_id: int,
+        beneficiary_member_id: int,
         category_id: int,
         transaction_type: TransactionType,
         telegram_chat_id: int,
     ) -> None:
         household = await self.session.get(Household, household_id)
         member = await self.session.get(Member, member_id)
+        beneficiary = await self.session.get(Member, beneficiary_member_id)
         category = await self.session.get(Category, category_id)
         if household is None or household.telegram_chat_id != telegram_chat_id:
             raise InvalidTransactionReferenceError("Telegram chat does not match household")
         if member is None or member.household_id != household_id:
             raise InvalidTransactionReferenceError("Member does not belong to household")
+        if beneficiary is None or beneficiary.household_id != household_id:
+            raise InvalidTransactionReferenceError("Beneficiary does not belong to household")
         if category is None or category.household_id not in (None, household_id):
             raise InvalidTransactionReferenceError("Category is not available to household")
         if category.type != transaction_type:

@@ -26,6 +26,7 @@ class AITransactionCandidate(BaseModel):
     currency: str | None
     category_code: str | None
     description: str | None
+    beneficiary_member_id: int | None
     transaction_date: str | None = Field(alias="date")
 
 
@@ -50,6 +51,7 @@ class RecognizedTransaction(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     category_code: str = Field(min_length=1, max_length=64)
     description: str = Field(max_length=500)
+    beneficiary_member_id: int | None = Field(default=None, gt=0)
     transaction_date: date = Field(alias="date")
 
     @field_serializer("amount")
@@ -65,6 +67,13 @@ class CategoryDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class MemberDefinition:
+    id: int
+    display_name: str
+    username: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class RecognitionResult:
     intent: RecognitionIntent
     transactions: tuple[RecognizedTransaction, ...]
@@ -77,6 +86,7 @@ __all__ = [
     "AIRecognitionResponse",
     "AITransactionCandidate",
     "CategoryDefinition",
+    "MemberDefinition",
     "RecognitionIntent",
     "RecognitionResult",
     "RecognizedTransaction",

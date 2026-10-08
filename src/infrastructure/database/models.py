@@ -81,7 +81,12 @@ class Member(TimestampMixin, Base):
     )
 
     household: Mapped[Household] = relationship(back_populates="members")
-    transactions: Mapped[list[Transaction]] = relationship(back_populates="member")
+    transactions: Mapped[list[Transaction]] = relationship(
+        back_populates="member", foreign_keys="Transaction.member_id"
+    )
+    beneficiary_transactions: Mapped[list[Transaction]] = relationship(
+        back_populates="beneficiary", foreign_keys="Transaction.beneficiary_member_id"
+    )
 
 
 class ProcessedTelegramUpdate(Base):
@@ -128,9 +133,13 @@ class Transaction(TimestampMixin, Base):
     __tablename__ = "transactions"
     __table_args__ = (
         UniqueConstraint(
-            "telegram_chat_id", "telegram_message_id", name="uq_transactions_telegram_message"
+            "telegram_chat_id",
+            "telegram_message_id",
+            "message_transaction_index",
+            name="uq_transactions_telegram_message_item",
         ),
         CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint("message_transaction_index >= 0", name="message_transaction_index_valid"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -138,6 +147,9 @@ class Transaction(TimestampMixin, Base):
         ForeignKey("households.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     member_id: Mapped[int] = mapped_column(
+        ForeignKey("members.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    beneficiary_member_id: Mapped[int] = mapped_column(
         ForeignKey("members.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     category_id: Mapped[int] = mapped_column(
@@ -153,6 +165,9 @@ class Transaction(TimestampMixin, Base):
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_transaction_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     status: Mapped[TransactionStatus] = mapped_column(
         transaction_status_enum,
         nullable=False,
@@ -165,7 +180,10 @@ class Transaction(TimestampMixin, Base):
     )
 
     household: Mapped[Household] = relationship(back_populates="transactions")
-    member: Mapped[Member] = relationship(back_populates="transactions")
+    member: Mapped[Member] = relationship(back_populates="transactions", foreign_keys=[member_id])
+    beneficiary: Mapped[Member] = relationship(
+        back_populates="beneficiary_transactions", foreign_keys=[beneficiary_member_id]
+    )
     category: Mapped[Category] = relationship(back_populates="transactions")
 
 

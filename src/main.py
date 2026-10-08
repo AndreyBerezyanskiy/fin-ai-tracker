@@ -2,16 +2,24 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.services import (
+    CategoryService,
+    HouseholdSettingsService,
     ReportService,
     TelegramBootstrapService,
     TransactionRecognitionService,
+    TransactionService,
 )
-from bot.handlers import create_commands_router, handle_error
-from bot.middlewares import AllowedMessageMiddleware, UpdateLoggingMiddleware
+from bot.handlers import create_commands_router, create_menu_router, handle_error
+from bot.middlewares import (
+    AllowedCallbackQueryMiddleware,
+    AllowedMessageMiddleware,
+    UpdateLoggingMiddleware,
+)
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
 from infrastructure.openai import OpenAITransactionRecognizer
@@ -25,18 +33,30 @@ def create_dispatcher(
     """Create the dispatcher and optionally attach database-backed dependencies."""
 
     dispatcher = Dispatcher()
+    dispatcher.include_router(create_menu_router())
     dispatcher.include_router(create_commands_router())
+    dispatcher.startup.register(set_bot_commands)
     dispatcher.errors.register(handle_error)
     dispatcher.update.outer_middleware(UpdateLoggingMiddleware())
 
     if settings is not None and session_factory is not None:
+        bootstrap_service = TelegramBootstrapService(session_factory)
         dispatcher.message.outer_middleware(
             AllowedMessageMiddleware(
                 allowed_chat_ids=settings.allowed_chat_ids,
-                bootstrap_service=TelegramBootstrapService(session_factory),
+                bootstrap_service=bootstrap_service,
+            )
+        )
+        dispatcher.callback_query.outer_middleware(
+            AllowedCallbackQueryMiddleware(
+                allowed_chat_ids=settings.allowed_chat_ids,
+                bootstrap_service=bootstrap_service,
             )
         )
         dispatcher["report_service"] = ReportService(session_factory)
+        dispatcher["category_service"] = CategoryService(session_factory)
+        dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
+        dispatcher["transaction_service"] = TransactionService(session_factory)
         openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
         dispatcher["transaction_recognition_service"] = TransactionRecognitionService(
             session_factory,
@@ -44,6 +64,22 @@ def create_dispatcher(
         )
 
     return dispatcher
+
+
+async def set_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="menu", description="Відкрити головне меню"),
+            BotCommand(command="today", description="Підсумок за сьогодні"),
+            BotCommand(command="month", description="Підсумок за місяць"),
+            BotCommand(command="last", description="Останні операції"),
+            BotCommand(command="stats", description="Статистика за категоріями"),
+            BotCommand(command="categories", description="Керування категоріями"),
+            BotCommand(command="undo", description="Скасувати останню операцію"),
+            BotCommand(command="settings", description="Налаштування групи"),
+            BotCommand(command="help", description="Допомога"),
+        ]
+    )
 
 
 async def start_bot(settings: Settings | None = None) -> None:

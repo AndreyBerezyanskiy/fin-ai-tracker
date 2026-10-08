@@ -14,6 +14,7 @@ from domain.models import (
     AIRecognitionResponse,
     AITransactionCandidate,
     CategoryDefinition,
+    MemberDefinition,
     RecognitionIntent,
 )
 from infrastructure.openai.recognizer import (
@@ -61,6 +62,7 @@ def transaction(
         "currency": currency,
         "category_code": category,
         "description": description,
+        "beneficiary_member_id": None,
         "date": transaction_date,
     }
 
@@ -436,6 +438,46 @@ async def test_metadata_is_minimal_and_excludes_message() -> None:
         "output_tokens": 30,
     }
     assert "Private Lidl details" not in repr(result.ai_metadata)
+
+
+@pytest.mark.asyncio
+async def test_beneficiary_is_validated_and_defaults_to_author() -> None:
+    explicit = transaction("expense", "20", "groceries", "Для Олени")
+    explicit["beneficiary_member_id"] = 2
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=[AITransactionCandidate.model_validate(explicit)],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+    recognizer, _parse = make_recognizer(parsed)
+    members = (
+        MemberDefinition(id=1, display_name="Андрій", username="andrii"),
+        MemberDefinition(id=2, display_name="Олена", username="olena"),
+    )
+
+    result = await recognizer.recognize(
+        message="продукти для Олени 20",
+        local_date=date(2026, 10, 7),
+        timezone="Europe/Paris",
+        base_currency="EUR",
+        allowed_categories=CATEGORIES,
+        allowed_members=members,
+        default_member_id=1,
+    )
+    assert result.transactions[0].beneficiary_member_id == 2
+
+    parsed.transactions[0].beneficiary_member_id = None
+    defaulted = await recognizer.recognize(
+        message="продукти 20",
+        local_date=date(2026, 10, 7),
+        timezone="Europe/Paris",
+        base_currency="EUR",
+        allowed_categories=CATEGORIES,
+        allowed_members=members,
+        default_member_id=1,
+    )
+    assert defaulted.transactions[0].beneficiary_member_id == 1
 
 
 def test_ai_schema_rejects_unsupported_transaction_type() -> None:

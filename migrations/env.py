@@ -10,7 +10,7 @@ from infrastructure.database.base import Base
 alembic_config = context.config
 
 if alembic_config.config_file_name is not None:
-    fileConfig(alembic_config.config_file_name)
+    fileConfig(alembic_config.config_file_name, disable_existing_loggers=False)
 
 if not alembic_config.get_main_option("sqlalchemy.url"):
     alembic_config.set_main_option("sqlalchemy.url", get_settings().sqlalchemy_database_url)

@@ -14,6 +14,7 @@ from domain.models import (
     AIRecognitionResponse,
     AITransactionCandidate,
     CategoryDefinition,
+    MemberDefinition,
     RecognitionIntent,
     RecognitionResult,
     RecognizedTransaction,
@@ -38,6 +39,9 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Використовуй лише передані category_code. Якщо категорія витрати незрозуміла,
   використовуй other; для незрозумілого доходу використовуй other_income.
 - description має бути коротким змістовним описом без суми, дати та валюти.
+- Якщо явно вказано, для кого операція, поверни id цієї людини з allowed_members у
+  beneficiary_member_id. Якщо людину не вказано, поверни null. Не вигадуй учасників.
+- Якщо вказане ім’я не можна однозначно зіставити з allowed_members, попроси уточнення.
 - Якщо повідомлення не описує фінансову операцію, intent=not_a_transaction і transactions=[].
 - Якщо сума або тип відсутні, залиш відповідне поле null і попроси коротке уточнення.
 """
@@ -58,8 +62,11 @@ class OpenAITransactionRecognizer:
         timezone: str,
         base_currency: str,
         allowed_categories: Iterable[CategoryDefinition],
+        allowed_members: Iterable[MemberDefinition] = (),
+        default_member_id: int | None = None,
     ) -> RecognitionResult:
         categories = tuple(allowed_categories)
+        members = tuple(allowed_members)
         request_data = {
             "original_message": message,
             "current_local_date": local_date.isoformat(),
@@ -68,6 +75,10 @@ class OpenAITransactionRecognizer:
             "allowed_categories": [
                 {"code": item.code, "name": item.name, "type": item.type.value}
                 for item in categories
+            ],
+            "allowed_members": [
+                {"id": item.id, "display_name": item.display_name, "username": item.username}
+                for item in members
             ],
         }
         response = await self.client.responses.parse(
@@ -92,6 +103,7 @@ class OpenAITransactionRecognizer:
             )
 
         category_by_code = {item.code: item for item in categories}
+        allowed_member_ids = {item.id for item in members}
         validated: list[RecognizedTransaction] = []
         for candidate in parsed.transactions:
             transaction_or_question = self._validate_candidate(
@@ -99,6 +111,8 @@ class OpenAITransactionRecognizer:
                 local_date=local_date,
                 base_currency=base_currency.upper(),
                 category_by_code=category_by_code,
+                allowed_member_ids=allowed_member_ids,
+                default_member_id=default_member_id,
             )
             if isinstance(transaction_or_question, str):
                 return self._clarification(transaction_or_question, metadata)
@@ -125,6 +139,8 @@ class OpenAITransactionRecognizer:
         local_date: date,
         base_currency: str,
         category_by_code: dict[str, CategoryDefinition],
+        allowed_member_ids: set[int],
+        default_member_id: int | None,
     ) -> RecognizedTransaction | str:
         if candidate.amount is None or candidate.type is None:
             return MISSING_AMOUNT_OR_TYPE_QUESTION
@@ -161,6 +177,10 @@ class OpenAITransactionRecognizer:
         if category is None or category.type is not candidate.type:
             return "Не вдалося визначити доступну категорію операції."
 
+        beneficiary_member_id = candidate.beneficiary_member_id or default_member_id
+        if beneficiary_member_id is not None and beneficiary_member_id not in allowed_member_ids:
+            return "Не вдалося визначити члена сім’ї. Уточніть ім’я, будь ласка."
+
         try:
             return RecognizedTransaction(
                 type=candidate.type,
@@ -168,6 +188,7 @@ class OpenAITransactionRecognizer:
                 currency=currency,
                 category_code=category.code,
                 description=(candidate.description or "").strip()[:500],
+                beneficiary_member_id=beneficiary_member_id,
                 date=transaction_date,
             )
         except ValidationError:
