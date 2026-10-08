@@ -141,7 +141,9 @@ async def menu_callback(
         await _edit(callback, "Оберіть тип категорій", reply_markup=category_types_keyboard())
         return
     if section == "last":
-        transactions = await transaction_service.list_recent(household_id=household.id)
+        transactions = await transaction_service.list_recent(
+            household_id=household.id, currency=household.currency
+        )
         lines = ["Останні підтверджені операції:"]
         lines.extend(
             f"{_format_transaction_line(item)} · {item.transaction_date:%d.%m.%Y}"

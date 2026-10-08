@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from aiogram import Router
@@ -11,7 +11,10 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReactionTypeEmoji
 
 from application.services import (
+    BudgetService,
+    BudgetStatus,
     CategoryService,
+    MonthReport,
     PeriodTotals,
     ReportService,
     TransactionRecognitionService,
@@ -34,6 +37,9 @@ HELP_TEXT = """Доступні команди:
 /help — показати цю інструкцію
 /today — підсумок за сьогодні
 /month — підсумок за поточний місяць
+/budget — стан загального й категорійних бюджетів
+/set_budget 2000 — встановити бюджет на поточний місяць
+/set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
 /undo — скасувати свою останню підтверджену операцію
 /categories — список категорій
@@ -86,8 +92,45 @@ async def today_command(
         household_id=household.id,
         start_date=today,
         end_date=today + timedelta(days=1),
+        currency=household.currency,
     )
-    await message.answer(_format_totals("Сьогодні", totals, household.currency))
+    transactions = await report_service.recent_transactions(
+        household_id=household.id,
+        start_date=today,
+        end_date=today + timedelta(days=1),
+        currency=household.currency,
+    )
+    lines = [_format_totals("Сьогодні", totals, household.currency), "", "Останні операції:"]
+    lines.extend(_format_transaction_line(item) for item in transactions)
+    if not transactions:
+        lines.append("Підтверджених операцій сьогодні немає.")
+    await message.answer("\n".join(lines))
+
+
+def _month_report_text(report: MonthReport, currency: str) -> str:
+    lines = [_format_totals("Цього місяця", report.totals, currency)]
+    if report.expense_categories:
+        lines.extend(["", "Витрати за категоріями:"])
+        lines.extend(
+            f"• {item.name}: {_currency_prefix(currency)}{item.amount:.2f}"
+            for item in report.expense_categories
+        )
+    if report.previous_totals is not None:
+        previous = report.previous_totals
+        lines.extend(
+            [
+                "",
+                "Порівняно з попереднім місяцем:",
+                f"• доходи: {_signed_amount(report.totals.income - previous.income, currency)}",
+                f"• витрати: {_signed_amount(report.totals.expense - previous.expense, currency)}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _signed_amount(value: Decimal, currency: str) -> str:
+    sign = "+" if value > 0 else "−" if value < 0 else ""
+    return f"{sign}{_currency_prefix(currency)}{abs(value):.2f}"
 
 
 async def month_command(
@@ -100,12 +143,125 @@ async def month_command(
     end_date = (
         date(today.year + 1, 1, 1) if today.month == 12 else date(today.year, today.month + 1, 1)
     )
-    totals = await report_service.totals(
+    previous_start = (
+        date(start_date.year - 1, 12, 1)
+        if start_date.month == 1
+        else date(start_date.year, start_date.month - 1, 1)
+    )
+    report = await report_service.month_report(
         household_id=household.id,
         start_date=start_date,
         end_date=end_date,
+        previous_start_date=previous_start,
+        currency=household.currency,
     )
-    await message.answer(_format_totals("Цього місяця", totals, household.currency))
+    await message.answer(_month_report_text(report, household.currency))
+
+
+def _parse_budget_amount(raw: str) -> Decimal | None:
+    try:
+        amount = Decimal(raw.replace(",", "."))
+    except InvalidOperation:
+        return None
+    if not amount.is_finite() or amount < 0 or amount > Decimal("9999999999999999.99"):
+        return None
+    return amount.quantize(Decimal("0.01"))
+
+
+async def set_budget_command(
+    message: Message,
+    household: Household,
+    budget_service: BudgetService,
+) -> None:
+    amount = _parse_budget_amount(_command_arguments(message))
+    if amount is None:
+        await message.answer("Формат: /set_budget 2000")
+        return
+    today = _today(household)
+    await budget_service.set_total(
+        household_id=household.id,
+        year=today.year,
+        month=today.month,
+        amount=amount,
+    )
+    await message.answer(
+        f"Місячний бюджет встановлено: {_currency_prefix(household.currency)}{amount:.2f}"
+    )
+
+
+async def set_category_budget_command(
+    message: Message,
+    household: Household,
+    budget_service: BudgetService,
+) -> None:
+    parts = _command_arguments(message).split()
+    amount = _parse_budget_amount(parts[1]) if len(parts) == 2 else None
+    if len(parts) != 2 or amount is None:
+        await message.answer("Формат: /set_category_budget groceries 600")
+        return
+    today = _today(household)
+    budget = await budget_service.set_category(
+        household_id=household.id,
+        year=today.year,
+        month=today.month,
+        category_code=parts[0],
+        amount=amount,
+    )
+    if budget is None:
+        await message.answer("Категорію витрат з таким кодом не знайдено.")
+        return
+    await message.answer(
+        f"Ліміт для {parts[0]} встановлено: {_currency_prefix(household.currency)}{amount:.2f}"
+    )
+
+
+def _percentage(value: Decimal | None) -> str:
+    return "не визначено" if value is None else f"{value:.1f}%"
+
+
+def _budget_text(status: BudgetStatus, currency: str) -> str:
+    prefix = _currency_prefix(currency)
+    lines = ["Бюджет цього місяця"]
+    if status.total_limit is None:
+        lines.extend(
+            [
+                "Загальний бюджет не встановлено.",
+                f"Витрачено: {prefix}{status.spent:.2f}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"Встановлено: {prefix}{status.total_limit:.2f}",
+                f"Витрачено: {prefix}{status.spent:.2f}",
+                f"Залишилося: {_format_balance(status.remaining or Decimal('0.00'), currency)}",
+                f"Використано: {_percentage(status.percentage)}",
+            ]
+        )
+    lines.append(f"Днів до кінця місяця: {status.days_remaining}")
+    lines.extend(["", "Ліміти категорій:"])
+    if not status.categories:
+        lines.append("Не встановлено.")
+    for item in status.categories:
+        lines.append(
+            f"• {item.name}: витрачено {prefix}{item.spent:.2f} з {prefix}{item.limit:.2f}; "
+            f"залишилося {_format_balance(item.remaining, currency)}; "
+            f"використано {_percentage(item.percentage)}"
+        )
+    return "\n".join(lines)
+
+
+async def budget_command(
+    message: Message,
+    household: Household,
+    budget_service: BudgetService,
+) -> None:
+    status = await budget_service.status(
+        household_id=household.id,
+        currency=household.currency,
+        today=_today(household),
+    )
+    await message.answer(_budget_text(status, household.currency))
 
 
 async def settings_command(message: Message, household: Household) -> None:
@@ -263,7 +419,9 @@ async def transaction_callback(
     title = f"{label} {count} {_operation_word(count)}"
     balance = None
     if status is TransactionStatus.CONFIRMED:
-        balance = await transaction_service.confirmed_balance(household_id=household.id)
+        balance = await transaction_service.confirmed_balance(
+            household_id=household.id, currency=household.currency
+        )
     if callback.message is not None:
         await callback.message.edit_text(
             _format_transactions(
@@ -296,7 +454,9 @@ async def last_command(
     household: Household,
     transaction_service: TransactionService,
 ) -> None:
-    transactions = await transaction_service.list_recent(household_id=household.id)
+    transactions = await transaction_service.list_recent(
+        household_id=household.id, currency=household.currency
+    )
     if not transactions:
         await message.answer("Підтверджених операцій ще немає.")
         return
@@ -498,6 +658,9 @@ def create_commands_router() -> Router:
     router.message.register(help_command, Command("help"))
     router.message.register(today_command, Command("today"))
     router.message.register(month_command, Command("month"))
+    router.message.register(budget_command, Command("budget"))
+    router.message.register(set_budget_command, Command("set_budget"))
+    router.message.register(set_category_budget_command, Command("set_category_budget"))
     router.message.register(last_command, Command("last"))
     router.message.register(undo_command, Command("undo"))
     router.message.register(categories_command, Command("categories"))

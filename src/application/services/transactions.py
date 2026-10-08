@@ -86,16 +86,20 @@ class TransactionService:
                 await repository.set_status(transaction, status)
             return BatchTransitionResult(tuple(transactions), changed=True)
 
-    async def list_recent(self, *, household_id: int, limit: int = 5) -> tuple[Transaction, ...]:
+    async def list_recent(
+        self, *, household_id: int, limit: int = 5, currency: str | None = None
+    ) -> tuple[Transaction, ...]:
         async with self.session_factory() as session:
             transactions = await TransactionRepository(session).list_recent_confirmed(
-                household_id, limit=limit
+                household_id, limit=limit, currency=currency
             )
             return tuple(transactions)
 
-    async def confirmed_balance(self, *, household_id: int) -> Decimal:
+    async def confirmed_balance(self, *, household_id: int, currency: str | None = None) -> Decimal:
         async with self.session_factory() as session:
-            return await TransactionRepository(session).confirmed_balance(household_id)
+            return await TransactionRepository(session).confirmed_balance(
+                household_id, currency=currency
+            )
 
     async def undo_last(self, *, household_id: int, member_id: int) -> Transaction | None:
         async with session_scope(self.session_factory) as session:

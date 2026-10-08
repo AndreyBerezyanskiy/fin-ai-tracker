@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.enums import TransactionType
 from infrastructure.database import Category, session_scope
-from infrastructure.repositories import CategoryRepository, TransactionRepository
+from infrastructure.repositories import (
+    CategoryRepository,
+    HouseholdRepository,
+    TransactionRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,9 @@ class CategoryService:
         self, *, household_id: int, start_date: date, end_date: date
     ) -> tuple[CategoryStatistic, ...]:
         async with self.session_factory() as session:
+            household = await HouseholdRepository(session).get(household_id)
+            if household is None:
+                raise ValueError("household not found")
             categories = {
                 item.code: item
                 for item in await CategoryRepository(session).list_for_management(household_id)
@@ -63,6 +70,7 @@ class CategoryService:
                 household_id=household_id,
                 start_date=start_date,
                 end_date=end_date,
+                currency=household.currency,
             )
             return tuple(
                 CategoryStatistic(

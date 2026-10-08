@@ -365,27 +365,47 @@ class TransactionRepository:
         return TransactionCreateResult(transaction=existing, created=False)
 
     async def list_recent_confirmed(
-        self, household_id: int, *, limit: int = 5
+        self,
+        household_id: int,
+        *,
+        limit: int = 5,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        currency: str | None = None,
     ) -> list[Transaction]:
+        filters = [
+            Transaction.household_id == household_id,
+            Transaction.status == TransactionStatus.CONFIRMED,
+        ]
+        if start_date is not None:
+            filters.append(Transaction.transaction_date >= start_date)
+        if end_date is not None:
+            filters.append(Transaction.transaction_date < end_date)
+        if currency is not None:
+            filters.append(Transaction.currency == currency.upper())
         statement = (
             select(Transaction)
             .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
-            .where(
-                Transaction.household_id == household_id,
-                Transaction.status == TransactionStatus.CONFIRMED,
+            .where(*filters)
+            .order_by(
+                Transaction.transaction_date.desc(),
+                Transaction.updated_at.desc(),
+                Transaction.id.desc(),
             )
-            .order_by(Transaction.updated_at.desc(), Transaction.id.desc())
             .limit(limit)
         )
         return list(await self.session.scalars(statement))
 
-    async def confirmed_balance(self, household_id: int) -> Decimal:
+    async def confirmed_balance(self, household_id: int, *, currency: str | None = None) -> Decimal:
+        filters = [
+            Transaction.household_id == household_id,
+            Transaction.status == TransactionStatus.CONFIRMED,
+        ]
+        if currency is not None:
+            filters.append(Transaction.currency == currency.upper())
         statement = (
             select(Transaction.type, func.sum(Transaction.amount))
-            .where(
-                Transaction.household_id == household_id,
-                Transaction.status == TransactionStatus.CONFIRMED,
-            )
+            .where(*filters)
             .group_by(Transaction.type)
         )
         amounts = dict((await self.session.execute(statement)).all())
@@ -394,17 +414,25 @@ class TransactionRepository:
         )
 
     async def category_totals(
-        self, *, household_id: int, start_date: date, end_date: date
+        self,
+        *,
+        household_id: int,
+        start_date: date,
+        end_date: date,
+        currency: str | None = None,
     ) -> list[CategoryTotal]:
+        filters = [
+            Transaction.household_id == household_id,
+            Transaction.status == TransactionStatus.CONFIRMED,
+            Transaction.transaction_date >= start_date,
+            Transaction.transaction_date < end_date,
+        ]
+        if currency is not None:
+            filters.append(Transaction.currency == currency.upper())
         statement = (
             select(Category.code, Transaction.type, func.sum(Transaction.amount))
             .join(Category, Category.id == Transaction.category_id)
-            .where(
-                Transaction.household_id == household_id,
-                Transaction.status == TransactionStatus.CONFIRMED,
-                Transaction.transaction_date >= start_date,
-                Transaction.transaction_date < end_date,
-            )
+            .where(*filters)
             .group_by(Category.code, Transaction.type)
             .order_by(Transaction.type, func.sum(Transaction.amount).desc())
         )
@@ -469,6 +497,20 @@ class BudgetRepository:
 
     async def get(self, budget_id: int) -> Budget | None:
         return await self.session.get(Budget, budget_id)
+
+    async def list_for_period(self, *, household_id: int, year: int, month: int) -> list[Budget]:
+        return list(
+            await self.session.scalars(
+                select(Budget)
+                .options(selectinload(Budget.category))
+                .where(
+                    Budget.household_id == household_id,
+                    Budget.year == year,
+                    Budget.month == month,
+                )
+                .order_by(Budget.category_id.asc().nulls_first())
+            )
+        )
 
     async def upsert(
         self,

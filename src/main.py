@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.services import (
+    BudgetService,
     CategoryService,
     HouseholdSettingsService,
     ReportService,
@@ -54,6 +55,7 @@ def create_dispatcher(
             )
         )
         dispatcher["report_service"] = ReportService(session_factory)
+        dispatcher["budget_service"] = BudgetService(session_factory)
         dispatcher["category_service"] = CategoryService(session_factory)
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
@@ -72,6 +74,9 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="menu", description="Відкрити головне меню"),
             BotCommand(command="today", description="Підсумок за сьогодні"),
             BotCommand(command="month", description="Підсумок за місяць"),
+            BotCommand(command="budget", description="Стан бюджетів і лімітів"),
+            BotCommand(command="set_budget", description="Встановити місячний бюджет"),
+            BotCommand(command="set_category_budget", description="Встановити ліміт категорії"),
             BotCommand(command="last", description="Останні операції"),
             BotCommand(command="stats", description="Статистика за категоріями"),
             BotCommand(command="categories", description="Керування категоріями"),

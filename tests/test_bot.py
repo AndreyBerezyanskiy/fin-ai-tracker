@@ -8,13 +8,24 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
-from application.services import PeriodTotals, TelegramContext
+from application.services import (
+    BudgetStatus,
+    CategoryBudgetStatus,
+    MonthReport,
+    PeriodTotals,
+    ReportCategoryTotal,
+    TelegramContext,
+)
 from bot.handlers.commands import (
+    budget_command,
     categories_command,
     category_add_command,
     help_command,
     last_command,
+    month_command,
     recognize_plain_message,
+    set_budget_command,
+    set_category_budget_command,
     settings_command,
     stats_command,
     today_command,
@@ -184,7 +195,8 @@ async def test_today_command_uses_deterministic_report_totals() -> None:
     report_service = SimpleNamespace(
         totals=AsyncMock(
             return_value=PeriodTotals(income=Decimal("100.00"), expense=Decimal("25.50"))
-        )
+        ),
+        recent_transactions=AsyncMock(return_value=()),
     )
 
     await today_command(message, household, report_service)
@@ -225,7 +237,10 @@ async def test_today_command_hides_empty_income_or_expense(
         currency="EUR",
         timezone="Europe/Paris",
     )
-    report_service = SimpleNamespace(totals=AsyncMock(return_value=totals))
+    report_service = SimpleNamespace(
+        totals=AsyncMock(return_value=totals),
+        recent_transactions=AsyncMock(return_value=()),
+    )
 
     await today_command(message, household, report_service)
 
@@ -233,6 +248,83 @@ async def test_today_command_hides_empty_income_or_expense(
     assert present in answer
     assert absent not in answer
     assert "Баланс:" in answer
+
+
+@pytest.mark.asyncio
+async def test_month_command_shows_categories_and_previous_month_comparison() -> None:
+    message = SimpleNamespace(answer=AsyncMock())
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    report = MonthReport(
+        totals=PeriodTotals(income=Decimal("2500.00"), expense=Decimal("700.00")),
+        expense_categories=(
+            ReportCategoryTotal("groceries", "Продукти", Decimal("500.00")),
+            ReportCategoryTotal("transport", "Транспорт", Decimal("200.00")),
+        ),
+        previous_totals=PeriodTotals(income=Decimal("2400.00"), expense=Decimal("800.00")),
+    )
+    service = SimpleNamespace(month_report=AsyncMock(return_value=report))
+
+    await month_command(message, household, service)
+
+    answer = message.answer.await_args.args[0]
+    assert "Доходи: 2500.00 EUR" in answer
+    assert "Продукти: €500.00" in answer
+    assert "доходи: +€100.00" in answer
+    assert "витрати: −€100.00" in answer
+    service.month_report.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_budget_commands_set_and_show_total_and_category_limits() -> None:
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    set_total_message = SimpleNamespace(text="/set_budget 2000", answer=AsyncMock())
+    set_category_message = SimpleNamespace(
+        text="/set_category_budget groceries 600", answer=AsyncMock()
+    )
+    report_message = SimpleNamespace(text="/budget", answer=AsyncMock())
+    service = SimpleNamespace(
+        set_total=AsyncMock(return_value=object()),
+        set_category=AsyncMock(return_value=object()),
+        status=AsyncMock(
+            return_value=BudgetStatus(
+                total_limit=Decimal("2000.00"),
+                spent=Decimal("500.00"),
+                days_remaining=12,
+                categories=(
+                    CategoryBudgetStatus(
+                        code="groceries",
+                        name="Продукти",
+                        limit=Decimal("600.00"),
+                        spent=Decimal("450.00"),
+                    ),
+                ),
+            )
+        ),
+    )
+
+    await set_budget_command(set_total_message, household, service)
+    await set_category_budget_command(set_category_message, household, service)
+    await budget_command(report_message, household, service)
+
+    assert service.set_total.await_args.kwargs["amount"] == Decimal("2000.00")
+    assert service.set_category.await_args.kwargs["category_code"] == "groceries"
+    answer = report_message.answer.await_args.args[0]
+    assert "Залишилося: €1500.00" in answer
+    assert "Використано: 25.0%" in answer
+    assert "Продукти: витрачено €450.00 з €600.00" in answer
+    assert "залишилося €150.00; використано 75.0%" in answer
 
 
 @pytest.mark.asyncio
@@ -372,7 +464,7 @@ async def test_transaction_callback_confirms_pending_batch() -> None:
     assert "✅ Підтверджено 1 операцію" in edited_text
     assert "Залишок: €62.00" in edited_text
     callback.message.edit_text.assert_awaited_once()
-    service.confirmed_balance.assert_awaited_once_with(household_id=1)
+    service.confirmed_balance.assert_awaited_once_with(household_id=1, currency="EUR")
     reaction_call = bot.set_message_reaction.await_args
     assert reaction_call.kwargs["chat_id"] == -100123
     assert reaction_call.kwargs["message_id"] == 10

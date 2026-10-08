@@ -12,11 +12,18 @@ from alembic.config import Config
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from application.services import CategoryService, HouseholdSettingsService, TransactionService
+from application.services import (
+    BudgetService,
+    CategoryService,
+    HouseholdSettingsService,
+    ReportService,
+    TransactionService,
+)
 from domain.enums import TransactionStatus, TransactionType
 from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
 from infrastructure.database import (
     Category,
+    Household,
     ProcessedTelegramUpdate,
     Transaction,
     create_engine,
@@ -72,13 +79,21 @@ async def service_session_factory(
     engine = create_engine(migrated_database)
     factory = create_session_factory(engine)
     async with session_scope(factory) as db_session:
-        await db_session.execute(delete(Transaction).where(Transaction.telegram_chat_id == -100999))
+        await db_session.execute(
+            delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
+        )
+        await db_session.execute(
+            delete(Household).where(Household.telegram_chat_id.in_((-100999, -100998)))
+        )
     try:
         yield factory
     finally:
         async with session_scope(factory) as db_session:
             await db_session.execute(
-                delete(Transaction).where(Transaction.telegram_chat_id == -100999)
+                delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
+            )
+            await db_session.execute(
+                delete(Household).where(Household.telegram_chat_id.in_((-100999, -100998)))
             )
         await engine.dispose()
 
@@ -155,7 +170,11 @@ async def test_transaction_insert_is_decimal_and_idempotent(session: AsyncSessio
     first = await repository.create_idempotent(**parameters)
     duplicate = await repository.create_idempotent(**parameters)
 
-    count = await session.scalar(select(func.count()).select_from(Transaction))
+    count = await session.scalar(
+        select(func.count())
+        .select_from(Transaction)
+        .where(Transaction.household_id == household.id)
+    )
     assert first.created is True
     assert duplicate.created is False
     assert duplicate.transaction.id == first.transaction.id
@@ -328,3 +347,160 @@ async def test_pending_batch_confirm_last_and_undo_flow(
     assert undone.status is TransactionStatus.CANCELLED
     assert len(await service.list_recent(household_id=household.id)) == 1
     assert await service.confirmed_balance(household_id=household.id) == Decimal("-18.00")
+
+
+@pytest.mark.asyncio
+async def test_reports_and_budgets_use_confirmed_base_currency_transactions(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    factory = service_session_factory
+    async with session_scope(factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Report test"
+        )
+        await db_session.execute(
+            delete(Transaction).where(Transaction.household_id == household.id)
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=98,
+            display_name="Звіт",
+        )
+        categories = {
+            item.code: item
+            for item in await CategoryRepository(db_session).list_available(household.id)
+        }
+        repository = TransactionRepository(db_session)
+        prepared = (
+            (
+                1,
+                TransactionType.INCOME,
+                "salary",
+                "200.00",
+                "EUR",
+                date(2026, 9, 30),
+                TransactionStatus.CONFIRMED,
+            ),
+            (
+                2,
+                TransactionType.INCOME,
+                "salary",
+                "1000.00",
+                "EUR",
+                date(2026, 10, 2),
+                TransactionStatus.CONFIRMED,
+            ),
+            (
+                3,
+                TransactionType.EXPENSE,
+                "groceries",
+                "120.00",
+                "EUR",
+                date(2026, 10, 3),
+                TransactionStatus.CONFIRMED,
+            ),
+            (
+                4,
+                TransactionType.EXPENSE,
+                "transport",
+                "30.00",
+                "EUR",
+                date(2026, 10, 4),
+                TransactionStatus.CONFIRMED,
+            ),
+            (
+                5,
+                TransactionType.EXPENSE,
+                "groceries",
+                "50.00",
+                "EUR",
+                date(2026, 10, 5),
+                TransactionStatus.PENDING,
+            ),
+            (
+                6,
+                TransactionType.EXPENSE,
+                "groceries",
+                "40.00",
+                "EUR",
+                date(2026, 10, 5),
+                TransactionStatus.CANCELLED,
+            ),
+            (
+                7,
+                TransactionType.EXPENSE,
+                "groceries",
+                "999.00",
+                "USD",
+                date(2026, 10, 3),
+                TransactionStatus.CONFIRMED,
+            ),
+        )
+        for message_id, kind, code, amount, currency, transaction_date, status in prepared:
+            await repository.create_idempotent(
+                household_id=household.id,
+                member_id=member.id,
+                category_id=categories[code].id,
+                transaction_type=kind,
+                amount=Decimal(amount),
+                currency=currency,
+                description=code,
+                transaction_date=transaction_date,
+                original_text=code,
+                telegram_chat_id=household.telegram_chat_id,
+                telegram_message_id=message_id,
+                status=status,
+            )
+
+    report = await ReportService(factory).month_report(
+        household_id=household.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        previous_start_date=date(2026, 9, 1),
+        currency="EUR",
+    )
+    assert report.totals.income == Decimal("1000.00")
+    assert report.totals.expense == Decimal("150.00")
+    assert report.totals.balance == Decimal("850.00")
+    assert {(item.code, item.amount) for item in report.expense_categories} == {
+        ("groceries", Decimal("120.00")),
+        ("transport", Decimal("30.00")),
+    }
+    assert report.previous_totals is not None
+    assert report.previous_totals.income == Decimal("200.00")
+
+    budget_service = BudgetService(factory)
+    await budget_service.set_total(
+        household_id=household.id,
+        year=2026,
+        month=10,
+        amount=Decimal("500.00"),
+    )
+    await budget_service.set_category(
+        household_id=household.id,
+        year=2026,
+        month=10,
+        category_code="groceries",
+        amount=Decimal("200.00"),
+    )
+    await budget_service.set_category(
+        household_id=household.id,
+        year=2026,
+        month=10,
+        category_code="transport",
+        amount=Decimal("50.00"),
+    )
+    status = await budget_service.status(
+        household_id=household.id,
+        currency="EUR",
+        today=date(2026, 10, 8),
+    )
+    assert status.total_limit == Decimal("500.00")
+    assert status.spent == Decimal("150.00")
+    assert status.remaining == Decimal("350.00")
+    assert status.percentage == Decimal("30.0")
+    assert status.days_remaining == 23
+    assert {item.code: (item.spent, item.remaining) for item in status.categories} == {
+        "groceries": (Decimal("120.00"), Decimal("80.00")),
+        "transport": (Decimal("30.00"), Decimal("20.00")),
+    }
