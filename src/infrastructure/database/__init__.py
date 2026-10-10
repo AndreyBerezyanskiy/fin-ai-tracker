@@ -6,9 +6,11 @@ from infrastructure.database.models import (
     Category,
     Household,
     Member,
+    MemberAlias,
     ProcessedTelegramUpdate,
     ReportDelivery,
     Transaction,
+    TransactionClarification,
 )
 from infrastructure.database.session import create_engine, create_session_factory, session_scope
 
@@ -18,9 +20,11 @@ __all__ = [
     "Category",
     "Household",
     "Member",
+    "MemberAlias",
     "ProcessedTelegramUpdate",
     "ReportDelivery",
     "Transaction",
+    "TransactionClarification",
     "create_engine",
     "create_session_factory",
     "session_scope",

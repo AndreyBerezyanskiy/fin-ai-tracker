@@ -480,6 +480,42 @@ async def test_beneficiary_is_validated_and_defaults_to_author() -> None:
     assert defaulted.transactions[0].beneficiary_member_id == 1
 
 
+async def test_clarification_context_and_member_aliases_are_sent_to_ai() -> None:
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=[],
+        needs_clarification=True,
+        clarification_question="Чи Яна — це Yanina?",
+        ambiguous_member_name="Яна",
+        suggested_member_id=2,
+    )
+    recognizer, parse = make_recognizer(parsed)
+
+    result = await recognizer.recognize(
+        message="Яна навчання 120",
+        local_date=date(2026, 10, 10),
+        timezone="Europe/Paris",
+        base_currency="EUR",
+        allowed_categories=CATEGORIES,
+        allowed_members=(
+            MemberDefinition(
+                id=2, display_name="Yanina", username="yanina", aliases=("Яна",)
+            ),
+        ),
+        clarification_question="Чи Яна — це Yanina?",
+        clarification_answer="так",
+    )
+
+    request_data = json.loads(parse.await_args.kwargs["input"])
+    assert request_data["allowed_members"][0]["aliases"] == ["Яна"]
+    assert request_data["clarification_context"] == {
+        "question": "Чи Яна — це Yanina?",
+        "answer": "так",
+    }
+    assert result.ambiguous_member_name == "Яна"
+    assert result.suggested_member_id == 2
+
+
 def test_ai_schema_rejects_unsupported_transaction_type() -> None:
     with pytest.raises(ValidationError):
         AITransactionCandidate.model_validate(transaction("transfer", "20", "other", "Transfer"))

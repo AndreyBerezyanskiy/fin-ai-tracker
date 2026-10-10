@@ -7,6 +7,11 @@ class TransactionActionCallback(CallbackData, prefix="transaction"):
     message_id: int
 
 
+class ClarificationCallback(CallbackData, prefix="clarify"):
+    action: str
+    clarification_id: int
+
+
 def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -28,4 +33,43 @@ def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
     )
 
 
-__all__ = ["TransactionActionCallback", "pending_transactions_keyboard"]
+def clarification_keyboard(
+    clarification_id: int, *, has_suggestion: bool
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if has_suggestion:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Так",
+                    callback_data=ClarificationCallback(
+                        action="yes", clarification_id=clarification_id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Ні, уточню",
+                    callback_data=ClarificationCallback(
+                        action="no", clarification_id=clarification_id
+                    ).pack(),
+                ),
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Скасувати",
+                callback_data=ClarificationCallback(
+                    action="cancel", clarification_id=clarification_id
+                ).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+__all__ = [
+    "ClarificationCallback",
+    "TransactionActionCallback",
+    "clarification_keyboard",
+    "pending_transactions_keyboard",
+]

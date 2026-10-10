@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
@@ -43,7 +43,7 @@ from bot.middlewares import (
 )
 from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
-from infrastructure.database import Household, Member
+from infrastructure.database import Household, Member, TransactionClarification
 
 
 def make_message(
@@ -448,6 +448,129 @@ async def test_plain_message_asks_clarification() -> None:
     message.answer.assert_awaited_once_with(result.clarification_question)
     transaction_service.create_pending.assert_not_awaited()
     processing_message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_plain_message_persists_member_clarification_with_buttons() -> None:
+    processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=10,
+        text="Яна навчання французької 120",
+        answer=AsyncMock(),
+        reply=AsyncMock(return_value=processing_message),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім'я", currency="EUR")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Андрій")
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(),
+        needs_clarification=True,
+        clarification_question="Чи «Яна» — це учасниця Yanina?",
+        ai_metadata={},
+        ambiguous_member_name="Яна",
+        suggested_member_id=3,
+    )
+    stored = SimpleNamespace(id=7, question=result.clarification_question, suggested_member_id=3)
+    clarification_service = SimpleNamespace(
+        get=AsyncMock(return_value=None), begin=AsyncMock(return_value=stored)
+    )
+
+    await recognize_plain_message(
+        message,
+        household,
+        member,
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        SimpleNamespace(create_pending=AsyncMock()),
+        clarification_service=clarification_service,
+    )
+
+    clarification_service.begin.assert_awaited_once_with(
+        household_id=1,
+        member_id=2,
+        original_message_id=10,
+        original_text=message.text,
+        question=result.clarification_question,
+        ambiguous_member_name="Яна",
+        suggested_member_id=3,
+    )
+    assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "Так"
+
+
+@pytest.mark.asyncio
+async def test_followup_answer_resumes_original_message_and_remembers_alias() -> None:
+    indicator = SimpleNamespace(message_id=12, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=11,
+        text="так",
+        answer=AsyncMock(side_effect=[indicator, None]),
+        reply=AsyncMock(),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім'я", currency="EUR")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Андрій")
+    clarification = TransactionClarification(
+        id=7,
+        household_id=1,
+        member_id=2,
+        original_message_id=10,
+        original_text="Яна навчання французької 120",
+        question="Чи «Яна» — це учасниця Yanina?",
+        attempts=0,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        ambiguous_member_name="Яна",
+        suggested_member_id=3,
+    )
+    recognized = RecognizedTransaction(
+        type=TransactionType.EXPENSE,
+        amount=Decimal("120"),
+        currency="EUR",
+        category_code="other",
+        description="Навчання французької",
+        beneficiary_member_id=3,
+        date="2026-10-10",
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(recognized,),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+    )
+    recognition_service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+    transaction_service = SimpleNamespace(create_pending=AsyncMock(return_value=(recognized,)))
+    clarification_service = SimpleNamespace(
+        get=AsyncMock(return_value=clarification),
+        cancel=AsyncMock(return_value=True),
+        remember_alias=AsyncMock(),
+    )
+
+    await recognize_plain_message(
+        message,
+        household,
+        member,
+        recognition_service,
+        transaction_service,
+        clarification_service=clarification_service,
+    )
+
+    recognition_service.recognize.assert_awaited_once_with(
+        message=clarification.original_text,
+        household=household,
+        member=member,
+        clarification_question=clarification.question,
+        clarification_answer="так",
+    )
+    transaction_service.create_pending.assert_awaited_once_with(
+        household=household,
+        member=member,
+        telegram_message_id=10,
+        original_text=clarification.original_text,
+        recognition=result,
+    )
+    clarification_service.remember_alias.assert_awaited_once_with(
+        household_id=1, member_id=3, alias="Яна"
+    )
+    clarification_service.cancel.assert_awaited_once_with(7)
+    indicator.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

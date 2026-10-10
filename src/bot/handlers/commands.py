@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -17,6 +17,7 @@ from application.services import (
     BudgetService,
     BudgetStatus,
     CategoryService,
+    ClarificationService,
     HouseholdSettingsService,
     MonthReport,
     PeriodTotals,
@@ -24,14 +25,17 @@ from application.services import (
     TransactionRecognitionService,
     TransactionService,
 )
+from application.services.clarifications import MAX_CLARIFICATION_ATTEMPTS
 from bot.keyboards import (
+    ClarificationCallback,
     TransactionActionCallback,
+    clarification_keyboard,
     main_menu_keyboard,
     pending_transactions_keyboard,
 )
 from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent
-from infrastructure.database import Household, Member
+from infrastructure.database import Household, Member, TransactionClarification
 from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,7 @@ HELP_TEXT = """Доступні команди:
 /set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
 /undo — скасувати свою останню підтверджену операцію
+/cancel — скасувати активне уточнення
 /categories — список категорій
 /category_add expense Назва — додати категорію
 /category_rename code Нова назва — перейменувати категорію
@@ -424,6 +429,7 @@ async def recognize_plain_message(
     transaction_recognition_service: TransactionRecognitionService,
     transaction_service: TransactionService,
     ai_rate_limiter: AIRateLimiter | None = None,
+    clarification_service: ClarificationService | None = None,
     max_message_length: int = 1000,
     store_original_text: bool = True,
 ) -> None:
@@ -437,6 +443,29 @@ async def recognize_plain_message(
     if ai_rate_limiter is not None and not ai_rate_limiter.allow(household.id):
         await message.answer("Забагато запитів. Зачекайте хвилину та спробуйте ще раз.")
         return
+    if clarification_service is not None:
+        clarification = await clarification_service.get(
+            household_id=household.id, member_id=member.id
+        )
+        if clarification is not None:
+            if clarification.expires_at <= datetime.now(UTC):
+                await clarification_service.cancel(clarification.id)
+                await message.answer(
+                    "Час на уточнення минув. Надішліть список операцій ще раз."
+                )
+                return
+            await _resolve_clarification(
+                message,
+                answer=message.text,
+                clarification=clarification,
+                household=household,
+                member=member,
+                transaction_recognition_service=transaction_recognition_service,
+                transaction_service=transaction_service,
+                clarification_service=clarification_service,
+                store_original_text=store_original_text,
+            )
+            return
     processing_message: Message | None = None
     try:
         processing_message = await message.reply("⏳ Обробляю…")
@@ -460,7 +489,25 @@ async def recognize_plain_message(
         if result.intent is RecognitionIntent.NOT_A_TRANSACTION:
             return
         if result.needs_clarification:
-            await message.answer(result.clarification_question)
+            if clarification_service is None:
+                await message.answer(result.clarification_question)
+                return
+            clarification = await clarification_service.begin(
+                household_id=household.id,
+                member_id=member.id,
+                original_message_id=message.message_id,
+                original_text=message.text,
+                question=result.clarification_question or "Уточніть операцію, будь ласка.",
+                ambiguous_member_name=result.ambiguous_member_name,
+                suggested_member_id=result.suggested_member_id,
+            )
+            await message.answer(
+                clarification.question,
+                reply_markup=clarification_keyboard(
+                    clarification.id,
+                    has_suggestion=clarification.suggested_member_id is not None,
+                ),
+            )
             return
         pending = await transaction_service.create_pending(
             household=household,
@@ -482,6 +529,177 @@ async def recognize_plain_message(
                     "Could not delete processing indicator: message_id=%s",
                     processing_message.message_id,
                 )
+
+
+def _is_affirmative(answer: str) -> bool:
+    return answer.casefold().strip(" .!?") in {"так", "yes", "ага", "авжеж", "підтверджую"}
+
+
+async def _resolve_clarification(
+    message: Message,
+    *,
+    answer: str,
+    clarification: TransactionClarification,
+    household: Household,
+    member: Member,
+    transaction_recognition_service: TransactionRecognitionService,
+    transaction_service: TransactionService,
+    clarification_service: ClarificationService,
+    store_original_text: bool,
+) -> None:
+    processing_message: Message | None = None
+    try:
+        processing_message = await message.answer("⏳ Обробляю уточнення…")
+        result = await transaction_recognition_service.recognize(
+            message=clarification.original_text,
+            household=household,
+            member=member,
+            clarification_question=clarification.question,
+            clarification_answer=answer,
+        )
+        next_attempt = clarification.attempts + 1
+        if result.intent is RecognitionIntent.NOT_A_TRANSACTION or result.needs_clarification:
+            if next_attempt >= MAX_CLARIFICATION_ATTEMPTS:
+                await clarification_service.cancel(clarification.id)
+                await message.answer(
+                    "Не вдалося завершити уточнення. Надішліть список операцій заново "
+                    "або скористайтеся /cancel."
+                )
+                return
+            question = (
+                result.clarification_question
+                if result.needs_clarification
+                else "Не зрозумів відповідь. Уточніть, будь ласка, повним реченням."
+            )
+            updated = await clarification_service.advance(
+                clarification.id,
+                question=question,
+                ambiguous_member_name=result.ambiguous_member_name,
+                suggested_member_id=result.suggested_member_id,
+            )
+            if updated is not None:
+                await message.answer(
+                    updated.question,
+                    reply_markup=clarification_keyboard(
+                        updated.id, has_suggestion=updated.suggested_member_id is not None
+                    ),
+                )
+            return
+
+        pending = await transaction_service.create_pending(
+            household=household,
+            member=member,
+            telegram_message_id=clarification.original_message_id,
+            original_text=clarification.original_text if store_original_text else "",
+            recognition=result,
+        )
+        if (
+            _is_affirmative(answer)
+            and clarification.ambiguous_member_name
+            and clarification.suggested_member_id
+        ):
+            await clarification_service.remember_alias(
+                household_id=household.id,
+                member_id=clarification.suggested_member_id,
+                alias=clarification.ambiguous_member_name,
+            )
+        await clarification_service.cancel(clarification.id)
+        await message.answer(
+            _format_transactions(pending, household),
+            reply_markup=pending_transactions_keyboard(
+                clarification.original_message_id
+            ),
+        )
+    except Exception as error:
+        logger.warning("AI clarification unavailable: error_type=%s", type(error).__name__)
+        await message.answer(AI_UNAVAILABLE_MESSAGE)
+    finally:
+        if processing_message is not None:
+            try:
+                await processing_message.delete()
+            except TelegramAPIError:
+                logger.warning(
+                    "Could not delete clarification indicator: message_id=%s",
+                    processing_message.message_id,
+                )
+
+
+async def cancel_clarification_command(
+    message: Message,
+    household: Household,
+    member: Member,
+    clarification_service: ClarificationService,
+) -> None:
+    cancelled = await clarification_service.cancel_for_member(
+        household_id=household.id, member_id=member.id
+    )
+    await message.answer("Уточнення скасовано." if cancelled else "Активного уточнення немає.")
+
+
+async def clarification_callback(
+    callback: CallbackQuery,
+    callback_data: ClarificationCallback,
+    household: Household,
+    member: Member,
+    transaction_recognition_service: TransactionRecognitionService,
+    transaction_service: TransactionService,
+    clarification_service: ClarificationService,
+    store_original_text: bool = True,
+) -> None:
+    clarification = await clarification_service.get_by_id(callback_data.clarification_id)
+    if (
+        clarification is None
+        or clarification.household_id != household.id
+        or clarification.member_id != member.id
+    ):
+        await callback.answer(
+            "Це уточнення вже неактивне або належить іншому учаснику.",
+            show_alert=True,
+        )
+        return
+    if clarification.expires_at <= datetime.now(UTC):
+        await clarification_service.cancel(clarification.id)
+        await callback.answer("Час на уточнення минув.", show_alert=True)
+        return
+    if callback_data.action == "cancel":
+        await clarification_service.cancel(clarification.id)
+        if callback.message is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer("Уточнення скасовано.")
+        await callback.answer()
+        return
+    if callback_data.action == "no":
+        updated = await clarification_service.advance(
+            clarification.id,
+            question="Кого саме ви мали на увазі? Напишіть точне ім’я.",
+        )
+        if callback.message is not None and updated is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(
+                updated.question,
+                reply_markup=clarification_keyboard(updated.id, has_suggestion=False),
+            )
+        await callback.answer()
+        return
+    if callback_data.action != "yes" or clarification.suggested_member_id is None:
+        await callback.answer("Невідома дія.", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("Не вдалося обробити відповідь.", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    await _resolve_clarification(
+        callback.message,
+        answer="так",
+        clarification=clarification,
+        household=household,
+        member=member,
+        transaction_recognition_service=transaction_recognition_service,
+        transaction_service=transaction_service,
+        clarification_service=clarification_service,
+        store_original_text=store_original_text,
+    )
 
 
 async def transaction_callback(
@@ -771,6 +989,8 @@ def create_commands_router() -> Router:
     router.message.register(category_show_command, Command("category_show"))
     router.message.register(stats_command, Command("stats"))
     router.message.register(settings_command, Command("settings"))
+    router.message.register(cancel_clarification_command, Command("cancel"))
     router.message.register(recognize_plain_message)
     router.callback_query.register(transaction_callback, TransactionActionCallback.filter())
+    router.callback_query.register(clarification_callback, ClarificationCallback.filter())
     return router

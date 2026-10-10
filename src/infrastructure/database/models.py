@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     Identity,
@@ -110,6 +111,52 @@ class Member(TimestampMixin, Base):
     )
     beneficiary_transactions: Mapped[list[Transaction]] = relationship(
         back_populates="beneficiary", foreign_keys="Transaction.beneficiary_member_id"
+    )
+
+
+class MemberAlias(TimestampMixin, Base):
+    __tablename__ = "member_aliases"
+    __table_args__ = (
+        UniqueConstraint("household_id", "normalized_alias", name="uq_member_alias_household"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[int] = mapped_column(
+        ForeignKey("members.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    alias: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class TransactionClarification(TimestampMixin, Base):
+    __tablename__ = "transaction_clarifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "member_id", name="uq_transaction_clarification_member"
+        ),
+        CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[int] = mapped_column(
+        ForeignKey("members.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    original_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    original_text: Mapped[str] = mapped_column(Text, nullable=False)
+    question: Mapped[str] = mapped_column(String(500), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    ambiguous_member_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    suggested_member_id: Mapped[int | None] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"), nullable=True
     )
 
 
@@ -256,7 +303,9 @@ __all__ = [
     "Category",
     "Household",
     "Member",
+    "MemberAlias",
     "ProcessedTelegramUpdate",
     "ReportDelivery",
     "Transaction",
+    "TransactionClarification",
 ]

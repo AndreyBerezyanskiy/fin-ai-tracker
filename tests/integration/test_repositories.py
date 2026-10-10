@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from application.services import (
     BudgetService,
     CategoryService,
+    ClarificationService,
     HouseholdSettingsService,
     ReportService,
     TransactionService,
@@ -24,8 +25,10 @@ from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransa
 from infrastructure.database import (
     Category,
     Household,
+    MemberAlias,
     ProcessedTelegramUpdate,
     Transaction,
+    TransactionClarification,
     create_engine,
     create_session_factory,
     session_scope,
@@ -138,6 +141,63 @@ async def test_telegram_update_is_claimed_once_and_can_be_released(session: Asyn
 
     assert await session.get(ProcessedTelegramUpdate, 12345) is None
     assert await repository.claim(12345) is True
+
+
+@pytest.mark.asyncio
+async def test_clarification_and_alias_survive_separate_database_sessions(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Сім'я уточнень"
+        )
+        author = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=41,
+            display_name="Андрій",
+        )
+        beneficiary = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=42,
+            display_name="Yanina",
+        )
+        household_id, author_id, beneficiary_id = household.id, author.id, beneficiary.id
+
+    service = ClarificationService(service_session_factory)
+    created = await service.begin(
+        household_id=household_id,
+        member_id=author_id,
+        original_message_id=100,
+        original_text="Яна навчання 120",
+        question="Чи Яна — це Yanina?",
+        ambiguous_member_name="Яна",
+        suggested_member_id=beneficiary_id,
+    )
+    loaded = await service.get(household_id=household_id, member_id=author_id)
+
+    assert loaded is not None
+    assert loaded.id == created.id
+    assert loaded.original_text == "Яна навчання 120"
+
+    await service.remember_alias(
+        household_id=household_id, member_id=beneficiary_id, alias="  ЯНА  "
+    )
+    await service.cancel(created.id)
+
+    async with service_session_factory() as db_session:
+        alias = await db_session.scalar(
+            select(MemberAlias).where(MemberAlias.household_id == household_id)
+        )
+        clarification_count = await db_session.scalar(
+            select(func.count()).select_from(TransactionClarification).where(
+                TransactionClarification.household_id == household_id
+            )
+        )
+    assert alias is not None
+    assert alias.alias == "ЯНА"
+    assert alias.normalized_alias == "яна"
+    assert alias.member_id == beneficiary_id
+    assert clarification_count == 0
 
 
 @pytest.mark.asyncio

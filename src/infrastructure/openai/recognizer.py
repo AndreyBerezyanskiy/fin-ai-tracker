@@ -43,6 +43,12 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Якщо явно вказано, для кого операція, поверни id цієї людини з allowed_members у
   beneficiary_member_id. Якщо людину не вказано, поверни null. Не вигадуй учасників.
 - Якщо вказане ім’я не можна однозначно зіставити з allowed_members, попроси уточнення.
+- aliases в allowed_members — це раніше підтверджені користувачем імена; зіставляй їх
+  без додаткового уточнення.
+- Якщо пропонуєш конкретного учасника для неоднозначного імені, поверни саме це ім’я в
+  ambiguous_member_name та id учасника в suggested_member_id. Інакше поверни null в обох полях.
+- Якщо передано clarification_context, врахуй початкове повідомлення, попереднє питання та
+  відповідь як один діалог і поверни повний список операцій із початкового повідомлення.
 - Якщо повідомлення не описує фінансову операцію, intent=not_a_transaction і transactions=[].
 - Якщо сума або тип відсутні, залиш відповідне поле null і попроси коротке уточнення.
 """
@@ -65,6 +71,8 @@ class OpenAITransactionRecognizer:
         allowed_categories: Iterable[CategoryDefinition],
         allowed_members: Iterable[MemberDefinition] = (),
         default_member_id: int | None = None,
+        clarification_question: str | None = None,
+        clarification_answer: str | None = None,
     ) -> RecognitionResult:
         categories = tuple(allowed_categories)
         members = tuple(allowed_members)
@@ -78,10 +86,20 @@ class OpenAITransactionRecognizer:
                 for item in categories
             ],
             "allowed_members": [
-                {"id": item.id, "display_name": item.display_name, "username": item.username}
+                {
+                    "id": item.id,
+                    "display_name": item.display_name,
+                    "username": item.username,
+                    "aliases": list(item.aliases),
+                }
                 for item in members
             ],
         }
+        if clarification_question is not None and clarification_answer is not None:
+            request_data["clarification_context"] = {
+                "question": clarification_question,
+                "answer": clarification_answer,
+            }
         response = await self.client.responses.parse(
             model=self.model,
             instructions=SYSTEM_PROMPT,
@@ -101,6 +119,8 @@ class OpenAITransactionRecognizer:
                 needs_clarification=False,
                 clarification_question=None,
                 ai_metadata=metadata,
+                ambiguous_member_name=None,
+                suggested_member_id=None,
             )
 
         category_by_code = {item.code: item for item in categories}
@@ -121,16 +141,48 @@ class OpenAITransactionRecognizer:
 
         if not validated:
             question = self._safe_question(parsed.clarification_question)
-            return self._clarification(question, metadata)
+            suggested_member_id = (
+                parsed.suggested_member_id
+                if parsed.suggested_member_id in allowed_member_ids
+                else None
+            )
+            ambiguous_member_name = (
+                parsed.ambiguous_member_name.strip()[:255]
+                if parsed.ambiguous_member_name and suggested_member_id is not None
+                else None
+            )
+            return self._clarification(
+                question,
+                metadata,
+                ambiguous_member_name=ambiguous_member_name,
+                suggested_member_id=suggested_member_id,
+            )
         if parsed.needs_clarification:
             question = self._safe_question(parsed.clarification_question)
-            return self._clarification(question, metadata)
+            suggested_member_id = (
+                parsed.suggested_member_id
+                if parsed.suggested_member_id in allowed_member_ids
+                else None
+            )
+            ambiguous_member_name = (
+                parsed.ambiguous_member_name.strip()[:255]
+                if parsed.ambiguous_member_name and suggested_member_id is not None
+                else None
+            )
+            return self._clarification(
+                question,
+                metadata,
+                ambiguous_member_name=ambiguous_member_name,
+                suggested_member_id=suggested_member_id,
+            )
         return RecognitionResult(
             intent=RecognitionIntent.CREATE_TRANSACTIONS,
             transactions=tuple(validated),
             needs_clarification=False,
             clarification_question=None,
             ai_metadata=metadata,
+            ambiguous_member_name=None,
+            suggested_member_id=None,
         )
 
     def _validate_candidate(
@@ -206,13 +258,21 @@ class OpenAITransactionRecognizer:
         return GENERIC_CLARIFICATION_QUESTION
 
     @staticmethod
-    def _clarification(question: str, metadata: dict[str, Any]) -> RecognitionResult:
+    def _clarification(
+        question: str,
+        metadata: dict[str, Any],
+        *,
+        ambiguous_member_name: str | None = None,
+        suggested_member_id: int | None = None,
+    ) -> RecognitionResult:
         return RecognitionResult(
             intent=RecognitionIntent.CREATE_TRANSACTIONS,
             transactions=(),
             needs_clarification=True,
             clarification_question=question,
             ai_metadata=metadata,
+            ambiguous_member_name=ambiguous_member_name,
+            suggested_member_id=suggested_member_id,
         )
 
     @staticmethod

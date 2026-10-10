@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -16,9 +16,11 @@ from infrastructure.database.models import (
     Category,
     Household,
     Member,
+    MemberAlias,
     ProcessedTelegramUpdate,
     ReportDelivery,
     Transaction,
+    TransactionClarification,
 )
 
 
@@ -190,6 +192,115 @@ class MemberRepository:
                 .order_by(Member.display_name, Member.id)
             )
         )
+
+
+class MemberAliasRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_for_household(self, household_id: int) -> list[MemberAlias]:
+        return list(
+            await self.session.scalars(
+                select(MemberAlias)
+                .where(MemberAlias.household_id == household_id)
+                .order_by(MemberAlias.id)
+            )
+        )
+
+    async def upsert(
+        self, *, household_id: int, member_id: int, alias: str, normalized_alias: str
+    ) -> MemberAlias:
+        statement = (
+            insert(MemberAlias)
+            .values(
+                household_id=household_id,
+                member_id=member_id,
+                alias=alias,
+                normalized_alias=normalized_alias,
+            )
+            .on_conflict_do_update(
+                constraint="uq_member_alias_household",
+                set_={"member_id": member_id, "alias": alias, "updated_at": func.now()},
+            )
+            .returning(MemberAlias)
+            .execution_options(populate_existing=True)
+        )
+        return (await self.session.scalars(statement)).one()
+
+
+class TransactionClarificationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_for_member(
+        self, *, household_id: int, member_id: int
+    ) -> TransactionClarification | None:
+        return await self.session.scalar(
+            select(TransactionClarification).where(
+                TransactionClarification.household_id == household_id,
+                TransactionClarification.member_id == member_id,
+            )
+        )
+
+    async def get_by_id(self, clarification_id: int) -> TransactionClarification | None:
+        return await self.session.get(TransactionClarification, clarification_id)
+
+    async def upsert(
+        self,
+        *,
+        household_id: int,
+        member_id: int,
+        original_message_id: int,
+        original_text: str,
+        question: str,
+        expires_at: datetime,
+        ambiguous_member_name: str | None,
+        suggested_member_id: int | None,
+    ) -> TransactionClarification:
+        values = {
+            "household_id": household_id,
+            "member_id": member_id,
+            "original_message_id": original_message_id,
+            "original_text": original_text,
+            "question": question,
+            "attempts": 0,
+            "expires_at": expires_at,
+            "ambiguous_member_name": ambiguous_member_name,
+            "suggested_member_id": suggested_member_id,
+        }
+        statement = (
+            insert(TransactionClarification)
+            .values(**values)
+            .on_conflict_do_update(
+                constraint="uq_transaction_clarification_member",
+                set_={**values, "updated_at": func.now()},
+            )
+            .returning(TransactionClarification)
+            .execution_options(populate_existing=True)
+        )
+        return (await self.session.scalars(statement)).one()
+
+    async def update(
+        self,
+        clarification: TransactionClarification,
+        *,
+        question: str,
+        attempts: int,
+        expires_at: datetime,
+        ambiguous_member_name: str | None,
+        suggested_member_id: int | None,
+    ) -> TransactionClarification:
+        clarification.question = question
+        clarification.attempts = attempts
+        clarification.expires_at = expires_at
+        clarification.ambiguous_member_name = ambiguous_member_name
+        clarification.suggested_member_id = suggested_member_id
+        await self.session.flush()
+        return clarification
+
+    async def delete(self, clarification: TransactionClarification) -> None:
+        await self.session.delete(clarification)
+        await self.session.flush()
 
 
 class ProcessedTelegramUpdateRepository:

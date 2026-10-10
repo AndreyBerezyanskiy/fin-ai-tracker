@@ -6,9 +6,11 @@ from infrastructure.repositories.repositories import (
     CategoryTotal,
     HouseholdRepository,
     InvalidTransactionReferenceError,
+    MemberAliasRepository,
     MemberRepository,
     ProcessedTelegramUpdateRepository,
     ReportDeliveryRepository,
+    TransactionClarificationRepository,
     TransactionCreateResult,
     TransactionRepository,
 )
@@ -20,8 +22,10 @@ __all__ = [
     "HouseholdRepository",
     "InvalidTransactionReferenceError",
     "MemberRepository",
+    "MemberAliasRepository",
     "ProcessedTelegramUpdateRepository",
     "ReportDeliveryRepository",
     "TransactionCreateResult",
     "TransactionRepository",
+    "TransactionClarificationRepository",
 ]

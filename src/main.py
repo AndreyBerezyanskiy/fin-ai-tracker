@@ -15,6 +15,7 @@ from application.services import (
     AutomaticReportService,
     BudgetService,
     CategoryService,
+    ClarificationService,
     HouseholdSettingsService,
     ReportService,
     TelegramBootstrapService,
@@ -71,6 +72,7 @@ def create_dispatcher(
         dispatcher["category_service"] = CategoryService(session_factory)
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
+        dispatcher["clarification_service"] = ClarificationService(session_factory)
         openai_client = AsyncOpenAI(
             api_key=settings.openai_api_key.get_secret_value(),
             timeout=settings.openai_timeout_seconds,
@@ -116,6 +118,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="stats", description="Статистика за категоріями"),
             BotCommand(command="categories", description="Керування категоріями"),
             BotCommand(command="undo", description="Скасувати останню операцію"),
+            BotCommand(command="cancel", description="Скасувати активне уточнення"),
             BotCommand(command="settings", description="Налаштування групи"),
             BotCommand(command="help", description="Допомога"),
         ]

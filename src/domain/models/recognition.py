@@ -39,6 +39,8 @@ class AIRecognitionResponse(BaseModel):
     transactions: list[AITransactionCandidate] = Field(max_length=10)
     needs_clarification: bool
     clarification_question: str | None
+    ambiguous_member_name: str | None = None
+    suggested_member_id: int | None = None
 
 
 class RecognizedTransaction(BaseModel):
@@ -71,6 +73,7 @@ class MemberDefinition:
     id: int
     display_name: str
     username: str | None
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +83,8 @@ class RecognitionResult:
     needs_clarification: bool
     clarification_question: str | None
     ai_metadata: dict[str, Any]
+    ambiguous_member_name: str | None = None
+    suggested_member_id: int | None = None
 
 
 __all__ = [

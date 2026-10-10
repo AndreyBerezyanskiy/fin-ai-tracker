@@ -16,7 +16,9 @@ from bot.keyboards.menu import (
     timezone_keyboard,
 )
 from bot.keyboards.transactions import (
+    ClarificationCallback,
     TransactionActionCallback,
+    clarification_keyboard,
     pending_transactions_keyboard,
 )
 
@@ -25,6 +27,8 @@ __all__ = [
     "MenuCallback",
     "SettingsMenuCallback",
     "TransactionActionCallback",
+    "ClarificationCallback",
+    "clarification_keyboard",
     "back_to_main_keyboard",
     "cancel_category_edit_keyboard",
     "category_detail_keyboard",
