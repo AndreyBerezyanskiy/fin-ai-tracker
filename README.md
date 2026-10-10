@@ -111,6 +111,10 @@ docker compose up --build bot
 docker compose --profile local-db up --build
 ```
 
+Production deployment використовує окремий Compose-файл, одноразовий migration service,
+worker healthcheck, автоматичний restart і ротацію логів. Повна покрокова інструкція:
+[docs/deployment.md](docs/deployment.md).
+
 ## Структура
 
 ```text

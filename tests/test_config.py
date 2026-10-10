@@ -48,3 +48,12 @@ def test_required_secrets_cannot_be_empty(
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_worker_heartbeat_file_must_be_absolute(
+    settings_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WORKER_HEARTBEAT_FILE", "relative/heartbeat")
+
+    with pytest.raises(ValidationError, match="must be an absolute path"):
+        Settings(_env_file=None)

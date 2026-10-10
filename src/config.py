@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     max_message_length: PositiveInt = Field(default=1000, le=4096)
     ai_requests_per_minute: PositiveInt = Field(default=10, le=120)
     store_original_text: bool = True
+    worker_heartbeat_file: str = "/tmp/family-finance-worker.heartbeat"
+    worker_heartbeat_interval_seconds: PositiveFloat = 10.0
 
     @field_validator("allowed_chat_ids_raw")
     @classmethod
@@ -56,6 +58,13 @@ class Settings(BaseSettings):
         if normalized not in valid_levels:
             raise ValueError(f"LOG_LEVEL must be one of: {', '.join(sorted(valid_levels))}")
         return normalized
+
+    @field_validator("worker_heartbeat_file")
+    @classmethod
+    def validate_worker_heartbeat_file(cls, value: str) -> str:
+        if not value.startswith("/"):
+            raise ValueError("WORKER_HEARTBEAT_FILE must be an absolute path")
+        return value
 
     @property
     def allowed_chat_ids(self) -> frozenset[int]:

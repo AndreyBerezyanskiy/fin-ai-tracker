@@ -1,0 +1,37 @@
+x-app: &app
+  image: family-finance-tracker:${IMAGE_TAG:-latest}
+  build:
+    context: .
+    target: runtime
+  env_file:
+    - ${APP_ENV_FILE:-.env.production}
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  bot:
+    <<: *app
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"

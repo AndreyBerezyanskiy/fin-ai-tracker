@@ -1,10 +1,12 @@
 import asyncio
+import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import BotCommand
 from openai import AsyncOpenAI
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from application.rate_limit import AIRateLimiter
 from application.report_scheduler import ReportScheduler
@@ -27,8 +29,11 @@ from bot.middlewares import (
 )
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
+from infrastructure.health import WorkerHeartbeat
 from infrastructure.observability import configure_logging
 from infrastructure.openai import OpenAIAdviceGenerator, OpenAITransactionRecognizer
+
+logger = logging.getLogger(__name__)
 
 
 def create_dispatcher(
@@ -117,6 +122,13 @@ async def set_bot_commands(bot: Bot) -> None:
     )
 
 
+async def verify_database_connection(engine: AsyncEngine) -> None:
+    """Fail startup before polling when PostgreSQL is unavailable."""
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+
+
 async def start_bot(settings: Settings | None = None) -> None:
     app_settings = settings or get_settings()
     configure_logging(app_settings.log_level)
@@ -125,10 +137,16 @@ async def start_bot(settings: Settings | None = None) -> None:
         app_settings.sqlalchemy_database_url,
         connect_timeout_seconds=app_settings.database_connect_timeout_seconds,
     )
-    session_factory = create_session_factory(engine)
-    dispatcher = create_dispatcher(settings=app_settings, session_factory=session_factory)
+    heartbeat = WorkerHeartbeat(
+        app_settings.worker_heartbeat_file,
+        interval_seconds=app_settings.worker_heartbeat_interval_seconds,
+    )
     report_scheduler: ReportScheduler | None = None
     try:
+        await verify_database_connection(engine)
+        logger.info("database_connection_verified")
+        session_factory = create_session_factory(engine)
+        dispatcher = create_dispatcher(settings=app_settings, session_factory=session_factory)
         telegram_session = AiohttpSession(timeout=app_settings.telegram_timeout_seconds)
         async with Bot(
             token=app_settings.telegram_bot_token.get_secret_value(),
@@ -140,12 +158,24 @@ async def start_bot(settings: Settings | None = None) -> None:
                     sender=bot,
                     report_service=automatic_report_service,
                 )
-                report_scheduler.start()
+
+                async def start_scheduler() -> None:
+                    report_scheduler.start()
+                    logger.info("report_scheduler_started")
+
+                async def stop_scheduler() -> None:
+                    report_scheduler.shutdown()
+                    logger.info("report_scheduler_stopped")
+
+                dispatcher.startup.register(start_scheduler)
+                dispatcher.shutdown.register(stop_scheduler)
+            heartbeat.start()
             await dispatcher.start_polling(
                 bot,
                 allowed_updates=dispatcher.resolve_used_update_types(),
             )
     finally:
+        await heartbeat.stop()
         if report_scheduler is not None:
             report_scheduler.shutdown()
         await engine.dispose()

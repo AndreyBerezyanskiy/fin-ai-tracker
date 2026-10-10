@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 family-finance-bot = "main:run"
+family-finance-healthcheck = "infrastructure.health:run"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
