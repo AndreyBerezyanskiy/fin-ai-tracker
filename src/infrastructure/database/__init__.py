@@ -7,6 +7,7 @@ from infrastructure.database.models import (
     Household,
     Member,
     ProcessedTelegramUpdate,
+    ReportDelivery,
     Transaction,
 )
 from infrastructure.database.session import create_engine, create_session_factory, session_scope
@@ -18,6 +19,7 @@ __all__ = [
     "Household",
     "Member",
     "ProcessedTelegramUpdate",
+    "ReportDelivery",
     "Transaction",
     "create_engine",
     "create_session_factory",

@@ -14,4 +14,9 @@ class TransactionStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-__all__ = ["TransactionStatus", "TransactionType"]
+class ReportType(StrEnum):
+    MORNING = "morning"
+    EVENING = "evening"
+
+
+__all__ = ["ReportType", "TransactionStatus", "TransactionType"]

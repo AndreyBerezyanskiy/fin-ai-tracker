@@ -21,6 +21,15 @@ class HouseholdSettingsService:
             await session.flush()
             return household
 
+    async def set_reports_enabled(self, household_id: int, *, enabled: bool) -> Household:
+        async with session_scope(self.session_factory) as session:
+            household = await HouseholdRepository(session).get(household_id)
+            if household is None:
+                raise ValueError("household not found")
+            household.reports_enabled = enabled
+            await session.flush()
+            return household
+
     async def set_timezone(self, *, household_id: int, timezone: str) -> Household:
         ZoneInfo(timezone)
         async with session_scope(self.session_factory) as session:

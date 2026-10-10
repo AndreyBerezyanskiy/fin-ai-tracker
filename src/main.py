@@ -6,8 +6,10 @@ from aiogram.types import BotCommand
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from application.report_scheduler import ReportScheduler
 from application.services import (
     AdviceService,
+    AutomaticReportService,
     BudgetService,
     CategoryService,
     HouseholdSettingsService,
@@ -63,10 +65,17 @@ def create_dispatcher(
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
         openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
-        dispatcher["advice_service"] = AdviceService(
+        advice_service = AdviceService(
             report_service,
             budget_service,
             OpenAIAdviceGenerator(openai_client, model=settings.openai_model),
+        )
+        dispatcher["advice_service"] = advice_service
+        dispatcher["automatic_report_service"] = AutomaticReportService(
+            session_factory,
+            report_service,
+            budget_service,
+            advice_service,
         )
         dispatcher["transaction_recognition_service"] = TransactionRecognitionService(
             session_factory,
@@ -84,6 +93,9 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="month", description="Підсумок за місяць"),
             BotCommand(command="budget", description="Стан бюджетів і лімітів"),
             BotCommand(command="advice", description="Короткі спостереження про бюджет"),
+            BotCommand(command="report", description="Поточний стан бюджету"),
+            BotCommand(command="reports_on", description="Увімкнути автоматичні звіти"),
+            BotCommand(command="reports_off", description="Вимкнути автоматичні звіти"),
             BotCommand(command="set_budget", description="Встановити місячний бюджет"),
             BotCommand(command="set_category_budget", description="Встановити ліміт категорії"),
             BotCommand(command="last", description="Останні операції"),
@@ -106,13 +118,23 @@ async def start_bot(settings: Settings | None = None) -> None:
     engine = create_engine(app_settings.sqlalchemy_database_url)
     session_factory = create_session_factory(engine)
     dispatcher = create_dispatcher(settings=app_settings, session_factory=session_factory)
+    report_scheduler: ReportScheduler | None = None
     try:
         async with Bot(token=app_settings.telegram_bot_token.get_secret_value()) as bot:
+            automatic_report_service = dispatcher.workflow_data.get("automatic_report_service")
+            if automatic_report_service is not None:
+                report_scheduler = ReportScheduler(
+                    sender=bot,
+                    report_service=automatic_report_service,
+                )
+                report_scheduler.start()
             await dispatcher.start_polling(
                 bot,
                 allowed_updates=dispatcher.resolve_used_update_types(),
             )
     finally:
+        if report_scheduler is not None:
+            report_scheduler.shutdown()
         await engine.dispose()
 
 

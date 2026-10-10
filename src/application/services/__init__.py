@@ -1,6 +1,7 @@
 """Application services."""
 
 from application.services.advice import AdviceCategory, AdviceReport, AdviceService
+from application.services.automatic_reports import AutomaticReportService
 from application.services.budgets import BudgetService, BudgetStatus, CategoryBudgetStatus
 from application.services.categories import CategoryService, CategoryStatistic
 from application.services.recognition import TransactionRecognitionService
@@ -19,6 +20,7 @@ __all__ = [
     "AdviceCategory",
     "AdviceReport",
     "AdviceService",
+    "AutomaticReportService",
     "PeriodTotals",
     "MonthReport",
     "ReportCategoryTotal",

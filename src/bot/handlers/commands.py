@@ -12,9 +12,11 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message, ReactionTypeEmoji
 
 from application.services import (
     AdviceService,
+    AutomaticReportService,
     BudgetService,
     BudgetStatus,
     CategoryService,
+    HouseholdSettingsService,
     MonthReport,
     PeriodTotals,
     ReportService,
@@ -26,7 +28,7 @@ from bot.keyboards import (
     main_menu_keyboard,
     pending_transactions_keyboard,
 )
-from domain.enums import TransactionStatus, TransactionType
+from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent
 from infrastructure.database import Household, Member
 
@@ -40,6 +42,9 @@ HELP_TEXT = """Доступні команди:
 /month — підсумок за поточний місяць
 /budget — стан загального й категорійних бюджетів
 /advice — короткі спостереження на основі місячного звіту
+/report — сформувати поточний звіт
+/reports_on — увімкнути автоматичні звіти
+/reports_off — вимкнути автоматичні звіти
 /set_budget 2000 — встановити бюджет на поточний місяць
 /set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
@@ -283,6 +288,48 @@ async def advice_command(
         return
     text = "Короткі спостереження:\n" + "\n".join(f"• {item}" for item in observations)
     await message.answer(text)
+
+
+async def report_command(
+    message: Message,
+    household: Household,
+    automatic_report_service: AutomaticReportService,
+) -> None:
+    today = _today(household)
+    text = await automatic_report_service.render(
+        household=household,
+        report_type=ReportType.EVENING,
+        local_date=today,
+    )
+    await message.answer(text)
+
+
+async def _set_reports_enabled(
+    message: Message,
+    household: Household,
+    household_settings_service: HouseholdSettingsService,
+    *,
+    enabled: bool,
+) -> None:
+    await household_settings_service.set_reports_enabled(household.id, enabled=enabled)
+    state = "увімкнено" if enabled else "вимкнено"
+    await message.answer(f"Автоматичні ранкові та вечірні звіти {state}.")
+
+
+async def reports_on_command(
+    message: Message,
+    household: Household,
+    household_settings_service: HouseholdSettingsService,
+) -> None:
+    await _set_reports_enabled(message, household, household_settings_service, enabled=True)
+
+
+async def reports_off_command(
+    message: Message,
+    household: Household,
+    household_settings_service: HouseholdSettingsService,
+) -> None:
+    await _set_reports_enabled(message, household, household_settings_service, enabled=False)
 
 
 async def settings_command(message: Message, household: Household) -> None:
@@ -681,6 +728,9 @@ def create_commands_router() -> Router:
     router.message.register(month_command, Command("month"))
     router.message.register(budget_command, Command("budget"))
     router.message.register(advice_command, Command("advice"))
+    router.message.register(report_command, Command("report"))
+    router.message.register(reports_on_command, Command("reports_on"))
+    router.message.register(reports_off_command, Command("reports_off"))
     router.message.register(set_budget_command, Command("set_budget"))
     router.message.register(set_category_budget_command, Command("set_category_budget"))
     router.message.register(last_command, Command("last"))

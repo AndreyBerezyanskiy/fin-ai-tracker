@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
@@ -24,6 +24,9 @@ from bot.handlers.commands import (
     last_command,
     month_command,
     recognize_plain_message,
+    report_command,
+    reports_off_command,
+    reports_on_command,
     set_budget_command,
     set_category_budget_command,
     settings_command,
@@ -38,7 +41,7 @@ from bot.middlewares import (
     AllowedMessageMiddleware,
     UpdateLoggingMiddleware,
 )
-from domain.enums import TransactionStatus, TransactionType
+from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
 from infrastructure.database import Household, Member
 
@@ -180,6 +183,34 @@ async def test_help_and_settings_commands_answer_in_ukrainian() -> None:
 
     assert "/today" in message.answer.await_args_list[0].args[0]
     assert "Europe/Paris" in message.answer.await_args_list[1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_manual_report_and_report_switch_commands() -> None:
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    report_message = SimpleNamespace(answer=AsyncMock())
+    report_service = SimpleNamespace(render=AsyncMock(return_value="Поточний звіт"))
+    settings_service = SimpleNamespace(set_reports_enabled=AsyncMock())
+
+    await report_command(report_message, household, report_service)
+    await reports_on_command(report_message, household, settings_service)
+    await reports_off_command(report_message, household, settings_service)
+
+    render_call = report_service.render.await_args.kwargs
+    assert render_call["report_type"] is ReportType.EVENING
+    assert render_call["household"] is household
+    settings_service.set_reports_enabled.assert_has_awaits(
+        [
+            call(1, enabled=True),
+            call(1, enabled=False),
+        ]
+    )
 
 
 @pytest.mark.asyncio

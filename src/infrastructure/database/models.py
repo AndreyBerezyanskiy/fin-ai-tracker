@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from domain.enums import TransactionStatus, TransactionType
+from domain.enums import ReportType, TransactionStatus, TransactionType
 from infrastructure.database.base import Base, TimestampMixin
 
 transaction_type_enum = Enum(
@@ -51,8 +51,12 @@ class Household(TimestampMixin, Base):
     timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="Europe/Paris", server_default="Europe/Paris"
     )
-    morning_report_time: Mapped[time | None] = mapped_column(Time, nullable=True)
-    evening_report_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    morning_report_time: Mapped[time] = mapped_column(
+        Time, nullable=False, default=time(8), server_default="08:00:00"
+    )
+    evening_report_time: Mapped[time] = mapped_column(
+        Time, nullable=False, default=time(20), server_default="20:00:00"
+    )
     reports_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
@@ -61,6 +65,26 @@ class Household(TimestampMixin, Base):
     categories: Mapped[list[Category]] = relationship(back_populates="household")
     transactions: Mapped[list[Transaction]] = relationship(back_populates="household")
     budgets: Mapped[list[Budget]] = relationship(back_populates="household")
+
+
+class ReportDelivery(TimestampMixin, Base):
+    __tablename__ = "report_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "report_type", "local_date", name="uq_report_delivery_slot"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    report_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    @property
+    def type(self) -> ReportType:
+        return ReportType(self.report_type)
 
 
 class Member(TimestampMixin, Base):
@@ -233,5 +257,6 @@ __all__ = [
     "Household",
     "Member",
     "ProcessedTelegramUpdate",
+    "ReportDelivery",
     "Transaction",
 ]

@@ -8,6 +8,7 @@ from infrastructure.repositories.repositories import (
     InvalidTransactionReferenceError,
     MemberRepository,
     ProcessedTelegramUpdateRepository,
+    ReportDeliveryRepository,
     TransactionCreateResult,
     TransactionRepository,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "InvalidTransactionReferenceError",
     "MemberRepository",
     "ProcessedTelegramUpdateRepository",
+    "ReportDeliveryRepository",
     "TransactionCreateResult",
     "TransactionRepository",
 ]

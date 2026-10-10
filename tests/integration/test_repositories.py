@@ -19,7 +19,7 @@ from application.services import (
     ReportService,
     TransactionService,
 )
-from domain.enums import TransactionStatus, TransactionType
+from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
 from infrastructure.database import (
     Category,
@@ -36,6 +36,7 @@ from infrastructure.repositories import (
     HouseholdRepository,
     MemberRepository,
     ProcessedTelegramUpdateRepository,
+    ReportDeliveryRepository,
     TransactionRepository,
 )
 
@@ -137,6 +138,27 @@ async def test_telegram_update_is_claimed_once_and_can_be_released(session: Asyn
 
     assert await session.get(ProcessedTelegramUpdate, 12345) is None
     assert await repository.claim(12345) is True
+
+
+@pytest.mark.asyncio
+async def test_report_delivery_slot_is_claimed_once_and_can_be_retried(
+    session: AsyncSession,
+) -> None:
+    household = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100124, name="Звіти"
+    )
+    repository = ReportDeliveryRepository(session)
+    parameters = {
+        "household_id": household.id,
+        "report_type": ReportType.MORNING,
+        "local_date": date(2026, 10, 8),
+    }
+
+    assert await repository.claim(**parameters) is True
+    assert await repository.claim(**parameters) is False
+
+    await repository.release(**parameters)
+    assert await repository.claim(**parameters) is True
 
 
 @pytest.mark.asyncio

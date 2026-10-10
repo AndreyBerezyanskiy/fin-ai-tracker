@@ -10,13 +10,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from domain.enums import TransactionStatus, TransactionType
+from domain.enums import ReportType, TransactionStatus, TransactionType
 from infrastructure.database.models import (
     Budget,
     Category,
     Household,
     Member,
     ProcessedTelegramUpdate,
+    ReportDelivery,
     Transaction,
 )
 
@@ -82,8 +83,8 @@ class HouseholdRepository:
         self,
         household: Household,
         *,
-        morning_report_time: time | None,
-        evening_report_time: time | None,
+        morning_report_time: time,
+        evening_report_time: time,
         reports_enabled: bool,
     ) -> Household:
         household.morning_report_time = morning_report_time
@@ -91,6 +92,42 @@ class HouseholdRepository:
         household.reports_enabled = reports_enabled
         await self.session.flush()
         return household
+
+    async def list_with_reports_enabled(self) -> list[Household]:
+        return list(
+            await self.session.scalars(
+                select(Household).where(Household.reports_enabled.is_(True)).order_by(Household.id)
+            )
+        )
+
+
+class ReportDeliveryRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def claim(self, *, household_id: int, report_type: ReportType, local_date: date) -> bool:
+        statement = (
+            insert(ReportDelivery)
+            .values(
+                household_id=household_id,
+                report_type=report_type.value,
+                local_date=local_date,
+            )
+            .on_conflict_do_nothing(constraint="uq_report_delivery_slot")
+            .returning(ReportDelivery.id)
+        )
+        return (await self.session.scalar(statement)) is not None
+
+    async def release(
+        self, *, household_id: int, report_type: ReportType, local_date: date
+    ) -> None:
+        await self.session.execute(
+            delete(ReportDelivery).where(
+                ReportDelivery.household_id == household_id,
+                ReportDelivery.report_type == report_type.value,
+                ReportDelivery.local_date == local_date,
+            )
+        )
 
 
 class MemberRepository:
