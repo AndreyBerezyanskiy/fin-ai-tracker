@@ -12,6 +12,10 @@ class ClarificationCallback(CallbackData, prefix="clarify"):
     clarification_id: int
 
 
+class BudgetActionCallback(CallbackData, prefix="budget"):
+    action: str
+
+
 def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -67,9 +71,26 @@ def clarification_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def budget_status_keyboard(*, can_set_from_income: bool) -> InlineKeyboardMarkup | None:
+    if not can_set_from_income:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Встановити ліміт із доходу",
+                    callback_data=BudgetActionCallback(action="set_from_income").pack(),
+                )
+            ]
+        ]
+    )
+
+
 __all__ = [
     "ClarificationCallback",
+    "BudgetActionCallback",
     "TransactionActionCallback",
     "clarification_keyboard",
+    "budget_status_keyboard",
     "pending_transactions_keyboard",
 ]

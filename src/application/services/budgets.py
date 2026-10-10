@@ -36,6 +36,11 @@ class BudgetStatus:
     spent: Decimal
     days_remaining: int
     categories: tuple[CategoryBudgetStatus, ...]
+    income: Decimal = Decimal("0.00")
+
+    @property
+    def balance(self) -> Decimal:
+        return self.income - self.spent
 
     @property
     def remaining(self) -> Decimal | None:
@@ -123,6 +128,16 @@ class BudgetService:
                     Transaction.transaction_date < end_date,
                 )
             )
+            income = await session.scalar(
+                select(func.sum(Transaction.amount)).where(
+                    Transaction.household_id == household_id,
+                    Transaction.status == TransactionStatus.CONFIRMED,
+                    Transaction.type == TransactionType.INCOME,
+                    Transaction.currency == currency.upper(),
+                    Transaction.transaction_date >= start_date,
+                    Transaction.transaction_date < end_date,
+                )
+            )
             category_totals = await TransactionRepository(session).category_totals(
                 household_id=household_id,
                 start_date=start_date,
@@ -151,6 +166,7 @@ class BudgetService:
             spent=spent or Decimal("0.00"),
             days_remaining=(end_date - today).days - 1,
             categories=category_statuses,
+            income=income or Decimal("0.00"),
         )
 
     @staticmethod

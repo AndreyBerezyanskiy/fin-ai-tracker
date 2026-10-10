@@ -27,8 +27,10 @@ from application.services import (
 )
 from application.services.clarifications import MAX_CLARIFICATION_ATTEMPTS
 from bot.keyboards import (
+    BudgetActionCallback,
     ClarificationCallback,
     TransactionActionCallback,
+    budget_status_keyboard,
     clarification_keyboard,
     main_menu_keyboard,
     pending_transactions_keyboard,
@@ -55,7 +57,7 @@ HELP_TEXT = """Доступні команди:
 /report — сформувати поточний звіт
 /reports_on — увімкнути автоматичні звіти
 /reports_off — вимкнути автоматичні звіти
-/set_budget 2000 — встановити бюджет на поточний місяць
+/set_budget 2000 — встановити ліміт витрат на поточний місяць
 /set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
 /undo — скасувати свою останню підтверджену операцію
@@ -203,7 +205,8 @@ async def set_budget_command(
         amount=amount,
     )
     await message.answer(
-        f"Місячний бюджет встановлено: {_currency_prefix(household.currency)}{amount:.2f}"
+        f"Місячний ліміт витрат встановлено: "
+        f"{_currency_prefix(household.currency)}{amount:.2f}"
     )
 
 
@@ -239,20 +242,21 @@ def _percentage(value: Decimal | None) -> str:
 
 def _budget_text(status: BudgetStatus, currency: str) -> str:
     prefix = _currency_prefix(currency)
-    lines = ["Бюджет цього місяця"]
+    lines = [
+        "Фінанси цього місяця",
+        f"Надходження: {prefix}{status.income:.2f}",
+        f"Витрати: {prefix}{status.spent:.2f}",
+        f"Баланс місяця: {_signed_amount(status.balance, currency)}",
+        "",
+    ]
     if status.total_limit is None:
-        lines.extend(
-            [
-                "Загальний бюджет не встановлено.",
-                f"Витрачено: {prefix}{status.spent:.2f}",
-            ]
-        )
+        lines.append("Ліміт витрат не встановлено.")
     else:
         lines.extend(
             [
-                f"Встановлено: {prefix}{status.total_limit:.2f}",
-                f"Витрачено: {prefix}{status.spent:.2f}",
-                f"Залишилося: {_format_balance(status.remaining or Decimal('0.00'), currency)}",
+                f"Ліміт витрат: {prefix}{status.total_limit:.2f}",
+                "Залишок за лімітом: "
+                f"{_format_balance(status.remaining or Decimal('0.00'), currency)}",
                 f"Використано: {_percentage(status.percentage)}",
             ]
         )
@@ -279,7 +283,49 @@ async def budget_command(
         currency=household.currency,
         today=_today(household),
     )
-    await message.answer(_budget_text(status, household.currency))
+    await message.answer(
+        _budget_text(status, household.currency),
+        reply_markup=budget_status_keyboard(
+            can_set_from_income=status.total_limit is None and status.income > 0
+        ),
+    )
+
+
+async def budget_callback(
+    callback: CallbackQuery,
+    callback_data: BudgetActionCallback,
+    household: Household,
+    budget_service: BudgetService,
+) -> None:
+    if callback_data.action != "set_from_income":
+        await callback.answer("Невідома дія.", show_alert=True)
+        return
+    today = _today(household)
+    status = await budget_service.status(
+        household_id=household.id,
+        currency=household.currency,
+        today=today,
+    )
+    if status.total_limit is not None:
+        await callback.answer("Ліміт витрат уже встановлено.", show_alert=True)
+        return
+    if status.income <= 0:
+        await callback.answer("Цього місяця ще немає підтверджених доходів.", show_alert=True)
+        return
+    await budget_service.set_total(
+        household_id=household.id,
+        year=today.year,
+        month=today.month,
+        amount=status.income,
+    )
+    updated = await budget_service.status(
+        household_id=household.id,
+        currency=household.currency,
+        today=today,
+    )
+    if callback.message is not None:
+        await callback.message.edit_text(_budget_text(updated, household.currency))
+    await callback.answer("Ліміт витрат встановлено.")
 
 
 async def advice_command(
@@ -993,4 +1039,5 @@ def create_commands_router() -> Router:
     router.message.register(recognize_plain_message)
     router.callback_query.register(transaction_callback, TransactionActionCallback.filter())
     router.callback_query.register(clarification_callback, ClarificationCallback.filter())
+    router.callback_query.register(budget_callback, BudgetActionCallback.filter())
     return router

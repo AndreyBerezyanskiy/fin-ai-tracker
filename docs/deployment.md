@@ -272,7 +272,28 @@ SQLAlchemy-суфікса `+psycopg`.
 
 ## 11. Оновлення і rollback
 
-Перед оновленням зробіть dump і Neon branch/snapshot, потім:
+Для звичайного оновлення використовуйте deployment-скрипт. Він перевіряє чистий Git
+working tree, виконує `pull --ff-only`, backup, Compose validation, build, зупинку worker,
+міграції, запуск і очікує стану `healthy`:
+
+```bash
+/opt/family-finance/app/scripts/deploy_production.sh
+```
+
+За замовчуванням скрипт використовує:
+
+```text
+APP_ENV_FILE=/opt/family-finance/.env.production
+COMPOSE_PROJECT_NAME=family-finance
+DEPLOY_USER=financebot
+BACKUP_DIR=/var/backups/family-finance
+```
+
+Шляхи можна змінити environment variables перед запуском. Скрипт запитує sudo-пароль
+на початку. Якщо migration завершується помилкою, worker залишається зупиненим, щоб старий
+код не працював із потенційно несумісною схемою.
+
+Ручний еквівалент процесу:
 
 ```bash
 sudo -u financebot git -C /opt/family-finance/app pull --ff-only

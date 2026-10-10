@@ -192,12 +192,16 @@ class AutomaticReportService:
 
     @classmethod
     def _budget_line(cls, budget: BudgetStatus, currency: str) -> str:
+        cashflow = (
+            f"За місяць: надходження {cls._money(budget.income, currency)}, "
+            f"витрати {cls._money(budget.spent, currency)}, "
+            f"баланс {cls._signed_money(budget.balance, currency)}."
+        )
         if budget.total_limit is None:
-            spent = cls._money(budget.spent, currency)
-            return f"Бюджет місяця: витрачено {spent}; ліміт не задано."
+            return f"{cashflow} Ліміт витрат не задано."
         percentage = "не визначено" if budget.percentage is None else f"{budget.percentage:.1f}%"
         return (
-            f"Бюджет місяця: {cls._money(budget.spent, currency)} з "
+            f"{cashflow} Ліміт витрат: {cls._money(budget.spent, currency)} з "
             f"{cls._money(budget.total_limit, currency)} ({percentage})."
         )
 
@@ -205,6 +209,11 @@ class AutomaticReportService:
     def _money(value: Decimal, currency: str) -> str:
         prefix = "€" if currency == "EUR" else f"{currency} "
         return f"{prefix}{value:.2f}"
+
+    @classmethod
+    def _signed_money(cls, value: Decimal, currency: str) -> str:
+        sign = "+" if value > 0 else "−" if value < 0 else ""
+        return f"{sign}{cls._money(abs(value), currency)}"
 
 
 def utc_now() -> datetime:

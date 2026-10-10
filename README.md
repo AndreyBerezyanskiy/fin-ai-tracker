@@ -121,6 +121,12 @@ Production deployment використовує окремий Compose-файл, 
 worker healthcheck, автоматичний restart і ротацію логів. Повна покрокова інструкція:
 [docs/deployment.md](docs/deployment.md).
 
+Після першого налаштування повне production-оновлення запускається однією командою:
+
+```bash
+./scripts/deploy_production.sh
+```
+
 ## Структура
 
 ```text
