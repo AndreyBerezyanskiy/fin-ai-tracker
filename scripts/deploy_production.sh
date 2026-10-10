@@ -9,6 +9,7 @@ deploy() {
     project_name=${COMPOSE_PROJECT_NAME:-family-finance}
     deploy_user=${DEPLOY_USER:-financebot}
     backup_dir=${BACKUP_DIR:-/var/backups/family-finance}
+    postgres_tool_image=${POSTGRES_TOOL_IMAGE:-postgres:18-alpine}
     compose_file="$app_dir/compose.production.yml"
     bot_stopped=0
 
@@ -54,7 +55,10 @@ deploy() {
     compose config --quiet
 
     echo "[4/9] Creating and validating a PostgreSQL backup"
-    sudo "$app_dir/scripts/backup_neon.sh" "$env_file" "$backup_dir"
+    sudo "$app_dir/scripts/backup_neon.sh" \
+        "$env_file" \
+        "$backup_dir" \
+        "$postgres_tool_image"
 
     echo "[5/9] Building the application image"
     compose build

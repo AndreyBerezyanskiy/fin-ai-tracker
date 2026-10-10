@@ -578,7 +578,9 @@ async def test_reports_and_budgets_use_confirmed_base_currency_transactions(
         today=date(2026, 10, 8),
     )
     assert status.total_limit == Decimal("500.00")
+    assert status.income == Decimal("1000.00")
     assert status.spent == Decimal("150.00")
+    assert status.balance == Decimal("850.00")
     assert status.remaining == Decimal("350.00")
     assert status.percentage == Decimal("30.0")
     assert status.days_remaining == 23

@@ -17,6 +17,7 @@ from application.services import (
     TelegramContext,
 )
 from bot.handlers.commands import (
+    budget_callback,
     budget_command,
     categories_command,
     category_add_command,
@@ -35,7 +36,7 @@ from bot.handlers.commands import (
     transaction_callback,
     undo_command,
 )
-from bot.keyboards import TransactionActionCallback
+from bot.keyboards import BudgetActionCallback, TransactionActionCallback
 from bot.middlewares import (
     AllowedCallbackQueryMiddleware,
     AllowedMessageMiddleware,
@@ -332,6 +333,7 @@ async def test_budget_commands_set_and_show_total_and_category_limits() -> None:
             return_value=BudgetStatus(
                 total_limit=Decimal("2000.00"),
                 spent=Decimal("500.00"),
+                income=Decimal("1100.00"),
                 days_remaining=12,
                 categories=(
                     CategoryBudgetStatus(
@@ -352,10 +354,88 @@ async def test_budget_commands_set_and_show_total_and_category_limits() -> None:
     assert service.set_total.await_args.kwargs["amount"] == Decimal("2000.00")
     assert service.set_category.await_args.kwargs["category_code"] == "groceries"
     answer = report_message.answer.await_args.args[0]
-    assert "Залишилося: €1500.00" in answer
+    assert "Надходження: €1100.00" in answer
+    assert "Витрати: €500.00" in answer
+    assert "Баланс місяця: +€600.00" in answer
+    assert "Залишок за лімітом: €1500.00" in answer
     assert "Використано: 25.0%" in answer
     assert "Продукти: витрачено €450.00 з €600.00" in answer
     assert "залишилося €150.00; використано 75.0%" in answer
+
+
+@pytest.mark.asyncio
+async def test_budget_without_limit_offers_explicit_income_based_limit() -> None:
+    message = SimpleNamespace(answer=AsyncMock())
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    status = BudgetStatus(
+        total_limit=None,
+        spent=Decimal("250.00"),
+        income=Decimal("1100.00"),
+        days_remaining=12,
+        categories=(),
+    )
+
+    await budget_command(
+        message,
+        household,
+        SimpleNamespace(status=AsyncMock(return_value=status)),
+    )
+
+    answer = message.answer.await_args.args[0]
+    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    assert "Баланс місяця: +€850.00" in answer
+    assert "Ліміт витрат не встановлено" in answer
+    assert keyboard.inline_keyboard[0][0].text == "Встановити ліміт із доходу"
+
+
+@pytest.mark.asyncio
+async def test_budget_callback_sets_limit_to_confirmed_monthly_income() -> None:
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    before = BudgetStatus(
+        total_limit=None,
+        spent=Decimal("250.00"),
+        income=Decimal("1100.00"),
+        days_remaining=12,
+        categories=(),
+    )
+    after = BudgetStatus(
+        total_limit=Decimal("1100.00"),
+        spent=Decimal("250.00"),
+        income=Decimal("1100.00"),
+        days_remaining=12,
+        categories=(),
+    )
+    service = SimpleNamespace(
+        status=AsyncMock(side_effect=[before, after]),
+        set_total=AsyncMock(),
+    )
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    await budget_callback(
+        callback,
+        BudgetActionCallback(action="set_from_income"),
+        household,
+        service,
+    )
+
+    assert service.set_total.await_args.kwargs["amount"] == Decimal("1100.00")
+    assert "Ліміт витрат: €1100.00" in callback.message.edit_text.await_args.args[0]
+    callback.answer.assert_awaited_once_with("Ліміт витрат встановлено.")
 
 
 @pytest.mark.asyncio

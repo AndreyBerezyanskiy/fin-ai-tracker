@@ -241,10 +241,11 @@ sudo ./scripts/backup_neon.sh \
   /opt/family-finance/.env.production /var/backups/family-finance
 ```
 
-Скрипт використовує офіційний `postgres:17-alpine` image і не відкриває порт. Перший запуск
-завантажить image. Major-версія `pg_dump` не повинна бути нижчою за server major: перевірте Neon
-командою `SHOW server_version;` і, якщо production уже на PostgreSQL 18, передайте третім
-аргументом `postgres:18-alpine`. Зберігайте ще одну зашифровану копію поза цим сервером.
+Скрипт за замовчуванням використовує офіційний `postgres:18-alpine` image і не відкриває
+порт. Перший запуск завантажить image. Major-версія `pg_dump` не повинна бути нижчою за
+server major: перевірте Neon командою `SHOW server_version;`. Після майбутнього major-upgrade
+Neon задайте відповідний `POSTGRES_TOOL_IMAGE`. Зберігайте ще одну зашифровану копію поза
+цим сервером.
 Retention для MVP:
 7 щоденних, 4 тижневих і 6 місячних копій; автоматичне видалення додавайте лише після
 перевірки off-site копії та restore rehearsal.
@@ -261,7 +262,7 @@ Retention для MVP:
 ```bash
 docker run --rm --env RESTORE_DATABASE_URL \
   --mount type=bind,src=/var/backups/family-finance,dst=/backup,readonly \
-  postgres:17-alpine \
+  postgres:18-alpine \
   sh -c 'pg_restore --clean --if-exists --no-owner --no-acl --dbname="$RESTORE_DATABASE_URL" /backup/finance-YYYYMMDDTHHMMSSZ.dump'
 ```
 
@@ -287,6 +288,7 @@ APP_ENV_FILE=/opt/family-finance/.env.production
 COMPOSE_PROJECT_NAME=family-finance
 DEPLOY_USER=financebot
 BACKUP_DIR=/var/backups/family-finance
+POSTGRES_TOOL_IMAGE=postgres:18-alpine
 ```
 
 Шляхи можна змінити environment variables перед запуском. Скрипт запитує sudo-пароль
