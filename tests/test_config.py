@@ -34,6 +34,13 @@ def test_invalid_allowed_chat_id_is_rejected(
         Settings(_env_file=None)
 
 
+def test_empty_allowlist_is_rejected(settings_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALLOWED_CHAT_IDS", "")
+
+    with pytest.raises(ValidationError, match="at least one Telegram chat ID"):
+        Settings(_env_file=None)
+
+
 def test_required_secrets_cannot_be_empty(
     settings_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

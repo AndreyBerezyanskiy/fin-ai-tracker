@@ -1,11 +1,12 @@
 import asyncio
-import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import BotCommand
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from application.rate_limit import AIRateLimiter
 from application.report_scheduler import ReportScheduler
 from application.services import (
     AdviceService,
@@ -26,6 +27,7 @@ from bot.middlewares import (
 )
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
+from infrastructure.observability import configure_logging
 from infrastructure.openai import OpenAIAdviceGenerator, OpenAITransactionRecognizer
 
 
@@ -64,7 +66,11 @@ def create_dispatcher(
         dispatcher["category_service"] = CategoryService(session_factory)
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
-        openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+        openai_client = AsyncOpenAI(
+            api_key=settings.openai_api_key.get_secret_value(),
+            timeout=settings.openai_timeout_seconds,
+            max_retries=settings.openai_max_retries,
+        )
         advice_service = AdviceService(
             report_service,
             budget_service,
@@ -81,6 +87,9 @@ def create_dispatcher(
             session_factory,
             OpenAITransactionRecognizer(openai_client, model=settings.openai_model),
         )
+        dispatcher["ai_rate_limiter"] = AIRateLimiter(settings.ai_requests_per_minute)
+        dispatcher["max_message_length"] = settings.max_message_length
+        dispatcher["store_original_text"] = settings.store_original_text
 
     return dispatcher
 
@@ -110,17 +119,21 @@ async def set_bot_commands(bot: Bot) -> None:
 
 async def start_bot(settings: Settings | None = None) -> None:
     app_settings = settings or get_settings()
-    logging.basicConfig(
-        level=app_settings.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(app_settings.log_level)
 
-    engine = create_engine(app_settings.sqlalchemy_database_url)
+    engine = create_engine(
+        app_settings.sqlalchemy_database_url,
+        connect_timeout_seconds=app_settings.database_connect_timeout_seconds,
+    )
     session_factory = create_session_factory(engine)
     dispatcher = create_dispatcher(settings=app_settings, session_factory=session_factory)
     report_scheduler: ReportScheduler | None = None
     try:
-        async with Bot(token=app_settings.telegram_bot_token.get_secret_value()) as bot:
+        telegram_session = AiohttpSession(timeout=app_settings.telegram_timeout_seconds)
+        async with Bot(
+            token=app_settings.telegram_bot_token.get_secret_value(),
+            session=telegram_session,
+        ) as bot:
             automatic_report_service = dispatcher.workflow_data.get("automatic_report_service")
             if automatic_report_service is not None:
                 report_scheduler = ReportScheduler(

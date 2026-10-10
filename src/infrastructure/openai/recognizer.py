@@ -24,6 +24,7 @@ MISSING_AMOUNT_OR_TYPE_QUESTION = "Не вдалося визначити сум
 INVALID_AMOUNT_QUESTION = "Сума має бути більшою за нуль. Уточніть суму, будь ласка."
 INVALID_DATE_QUESTION = "Не вдалося визначити дату. Уточніть дату операції, будь ласка."
 GENERIC_CLARIFICATION_QUESTION = "Уточніть, будь ласка, суму та тип операції."
+MAX_TRANSACTION_AMOUNT = Decimal("9999999999999999.99")
 
 SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові операції з коротких повідомлень.
 Поверни лише дані за наданою схемою. Не роби фінансових розрахунків і не виконуй дій.
@@ -149,7 +150,7 @@ class OpenAITransactionRecognizer:
             amount = Decimal(candidate.amount.strip().replace(",", "."))
         except (InvalidOperation, AttributeError):
             return MISSING_AMOUNT_OR_TYPE_QUESTION
-        if not amount.is_finite() or amount <= 0:
+        if not amount.is_finite() or amount <= 0 or amount > MAX_TRANSACTION_AMOUNT:
             return INVALID_AMOUNT_QUESTION
         try:
             amount = amount.quantize(Decimal("0.01"))

@@ -13,6 +13,7 @@ from application.services.budgets import BudgetService, BudgetStatus
 from application.services.telegram import ReportService
 from domain.enums import ReportType
 from infrastructure.database import Household, session_scope
+from infrastructure.observability import pseudonymize
 from infrastructure.repositories import HouseholdRepository, ReportDeliveryRepository
 
 logger = logging.getLogger(__name__)
@@ -129,8 +130,8 @@ class AutomaticReportService:
             )
         except Exception as error:
             logger.warning(
-                "Evening AI observation unavailable: household_id=%s error_type=%s",
-                household.id,
+                "Evening AI observation unavailable: household_ref=%s error_type=%s",
+                pseudonymize(household.id),
                 type(error).__name__,
             )
             return "Автоматичне спостереження тимчасово недоступне."

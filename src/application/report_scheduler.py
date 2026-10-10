@@ -8,6 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from application.services.automatic_reports import AutomaticReportService, ReportSender
+from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +60,9 @@ class ReportScheduler:
                 )
             except Exception as error:
                 logger.warning(
-                    "Automatic report delivery failed: household_id=%s report_type=%s "
+                    "Automatic report delivery failed: household_ref=%s report_type=%s "
                     "error_type=%s",
-                    household.id,
+                    pseudonymize(household.id),
                     report_type.value,
                     type(error).__name__,
                 )

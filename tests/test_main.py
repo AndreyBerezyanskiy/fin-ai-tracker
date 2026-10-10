@@ -31,7 +31,7 @@ async def test_bot_startup_reaches_long_polling(
     monkeypatch.setattr(dispatcher, "start_polling", start_polling)
     monkeypatch.setattr(main, "create_dispatcher", lambda **_kwargs: dispatcher)
     engine = SimpleNamespace(dispose=AsyncMock())
-    monkeypatch.setattr(main, "create_engine", lambda _url: engine)
+    monkeypatch.setattr(main, "create_engine", lambda _url, **_kwargs: engine)
     monkeypatch.setattr(main, "create_session_factory", lambda _engine: object())
 
     await main.start_bot(settings)

@@ -9,6 +9,13 @@ services:
       - ALLOWED_CHAT_IDS
       - APP_ENV
       - LOG_LEVEL
+      - TELEGRAM_TIMEOUT_SECONDS
+      - OPENAI_TIMEOUT_SECONDS
+      - OPENAI_MAX_RETRIES
+      - DATABASE_CONNECT_TIMEOUT_SECONDS
+      - MAX_MESSAGE_LENGTH
+      - AI_REQUESTS_PER_MINUTE
+      - STORE_ORIGINAL_TEXT
     restart: unless-stopped
 
   db:

@@ -30,6 +30,8 @@ class TransactionService:
         original_text: str,
         recognition: RecognitionResult,
     ) -> tuple[Transaction, ...]:
+        if member.household_id != household.id:
+            raise ValueError("member does not belong to household")
         async with session_scope(self.session_factory) as session:
             categories = {
                 category.code: category

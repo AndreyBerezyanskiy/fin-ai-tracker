@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, PositiveFloat, PositiveInt, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type AppEnvironment = Literal["development", "test", "production"]
@@ -27,11 +27,20 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-6-luna"
     app_env: AppEnvironment = "development"
     log_level: str = "INFO"
+    telegram_timeout_seconds: PositiveFloat = 20.0
+    openai_timeout_seconds: PositiveFloat = 20.0
+    openai_max_retries: int = Field(default=2, ge=0, le=5)
+    database_connect_timeout_seconds: PositiveInt = 10
+    max_message_length: PositiveInt = Field(default=1000, le=4096)
+    ai_requests_per_minute: PositiveInt = Field(default=10, le=120)
+    store_original_text: bool = True
 
     @field_validator("allowed_chat_ids_raw")
     @classmethod
     def validate_allowed_chat_ids(cls, value: str) -> str:
         entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+        if not entries:
+            raise ValueError("ALLOWED_CHAT_IDS must contain at least one Telegram chat ID")
         try:
             for entry in entries:
                 int(entry)

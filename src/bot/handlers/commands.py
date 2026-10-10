@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReactionTypeEmoji
 
+from application.rate_limit import AIRateLimiter
 from application.services import (
     AdviceService,
     AutomaticReportService,
@@ -31,8 +32,13 @@ from bot.keyboards import (
 from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent
 from infrastructure.database import Household, Member
+from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
+
+AI_UNAVAILABLE_MESSAGE = (
+    "Не вдалося розпізнати операцію. Спробуйте ще раз або напишіть у форматі: 34 продукти Lidl."
+)
 
 HELP_TEXT = """Доступні команди:
 /start — підключити цю сімейну групу
@@ -275,15 +281,19 @@ async def advice_command(
     message: Message,
     household: Household,
     advice_service: AdviceService,
+    ai_rate_limiter: AIRateLimiter | None = None,
 ) -> None:
+    if ai_rate_limiter is not None and not ai_rate_limiter.allow(household.id):
+        await message.answer("Забагато запитів. Зачекайте хвилину та спробуйте ще раз.")
+        return
     try:
         observations = await advice_service.generate(
             household_id=household.id,
             currency=household.currency,
             today=_today(household),
         )
-    except ValueError:
-        logger.warning("AI advice failed server validation: household_id=%s", household.id)
+    except Exception:
+        logger.warning("AI advice unavailable: household_ref=%s", pseudonymize(household.id))
         await message.answer("Не вдалося сформувати надійну пораду. Спробуйте ще раз пізніше.")
         return
     text = "Короткі спостереження:\n" + "\n".join(f"• {item}" for item in observations)
@@ -413,8 +423,19 @@ async def recognize_plain_message(
     member: Member,
     transaction_recognition_service: TransactionRecognitionService,
     transaction_service: TransactionService,
+    ai_rate_limiter: AIRateLimiter | None = None,
+    max_message_length: int = 1000,
+    store_original_text: bool = True,
 ) -> None:
     if not message.text:
+        return
+    if len(message.text) > max_message_length:
+        await message.answer(
+            f"Повідомлення надто довге. Скоротіть його до {max_message_length} символів."
+        )
+        return
+    if ai_rate_limiter is not None and not ai_rate_limiter.allow(household.id):
+        await message.answer("Забагато запитів. Зачекайте хвилину та спробуйте ще раз.")
         return
     processing_message: Message | None = None
     try:
@@ -423,11 +444,19 @@ async def recognize_plain_message(
         logger.warning("Could not send processing indicator: message_id=%s", message.message_id)
 
     try:
-        result = await transaction_recognition_service.recognize(
-            message=message.text,
-            household=household,
-            member=member,
-        )
+        try:
+            result = await transaction_recognition_service.recognize(
+                message=message.text,
+                household=household,
+                member=member,
+            )
+        except Exception as error:
+            logger.warning(
+                "AI transaction recognition unavailable: error_type=%s",
+                type(error).__name__,
+            )
+            await message.answer(AI_UNAVAILABLE_MESSAGE)
+            return
         if result.intent is RecognitionIntent.NOT_A_TRANSACTION:
             return
         if result.needs_clarification:
@@ -437,7 +466,7 @@ async def recognize_plain_message(
             household=household,
             member=member,
             telegram_message_id=message.message_id,
-            original_text=message.text,
+            original_text=message.text if store_original_text else "",
             recognition=result,
         )
         await message.answer(
@@ -510,8 +539,8 @@ async def transaction_callback(
             )
         except TelegramAPIError:
             logger.warning(
-                "Could not react to confirmed transaction message: chat_id=%s message_id=%s",
-                household.telegram_chat_id,
+                "Could not react to confirmed transaction message: chat_ref=%s message_id=%s",
+                pseudonymize(household.telegram_chat_id),
                 callback_data.message_id,
             )
     await callback.answer(label)

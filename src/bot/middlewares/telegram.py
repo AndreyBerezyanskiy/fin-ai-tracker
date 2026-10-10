@@ -9,6 +9,7 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 
 from application.services import TelegramBootstrapService
+from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,18 @@ class UpdateLoggingMiddleware(BaseMiddleware):
         if isinstance(event, Update):
             message = event.message or event.edited_message
             logger.info(
-                "Telegram update received: update_id=%s type=%s chat_id=%s user_id=%s",
+                "telegram_update_received update_id=%s",
                 event.update_id,
-                event.event_type,
-                message.chat.id if message else None,
-                message.from_user.id if message and message.from_user else None,
+                extra={
+                    "event_data": {
+                        "update_id": event.update_id,
+                        "update_type": event.event_type,
+                        "chat_ref": pseudonymize(message.chat.id if message else None),
+                        "user_ref": pseudonymize(
+                            message.from_user.id if message and message.from_user else None
+                        ),
+                    }
+                },
             )
         return await handler(event, data)
 
@@ -53,7 +61,10 @@ class AllowedMessageMiddleware(BaseMiddleware):
         if event.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
             return None
         if event.chat.id not in self.allowed_chat_ids:
-            logger.warning("Ignoring message from a non-allowed chat: chat_id=%s", event.chat.id)
+            logger.warning(
+                "telegram_chat_not_allowed",
+                extra={"event_data": {"chat_ref": pseudonymize(event.chat.id)}},
+            )
             return None
         if event.from_user is None or event.from_user.is_bot:
             return None
@@ -104,7 +115,10 @@ class AllowedCallbackQueryMiddleware(BaseMiddleware):
         if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
             return None
         if chat.id not in self.allowed_chat_ids:
-            logger.warning("Ignoring callback from a non-allowed chat: chat_id=%s", chat.id)
+            logger.warning(
+                "telegram_chat_not_allowed",
+                extra={"event_data": {"chat_ref": pseudonymize(chat.id)}},
+            )
             return None
         if event.from_user.is_bot:
             return None

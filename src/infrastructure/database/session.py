@@ -10,10 +10,21 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def create_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
+def create_engine(
+    database_url: str,
+    *,
+    echo: bool = False,
+    connect_timeout_seconds: int = 10,
+) -> AsyncEngine:
     """Create the application's async PostgreSQL engine."""
 
-    engine = create_async_engine(database_url, echo=echo, pool_pre_ping=True)
+    engine = create_async_engine(
+        database_url,
+        echo=echo,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        connect_args={"connect_timeout": connect_timeout_seconds},
+    )
 
     @event.listens_for(engine.sync_engine, "connect")
     def set_utc_timezone(dbapi_connection: object, _connection_record: object) -> None:
