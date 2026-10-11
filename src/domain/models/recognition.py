@@ -85,6 +85,7 @@ class RecognitionResult:
     ai_metadata: dict[str, Any]
     ambiguous_member_name: str | None = None
     suggested_member_id: int | None = None
+    missing_category_type: TransactionType | None = None
 
 
 __all__ = [

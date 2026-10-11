@@ -550,7 +550,12 @@ async def test_plain_message_persists_member_clarification_with_buttons() -> Non
         ambiguous_member_name="Яна",
         suggested_member_id=3,
     )
-    stored = SimpleNamespace(id=7, question=result.clarification_question, suggested_member_id=3)
+    stored = SimpleNamespace(
+        id=7,
+        question=result.clarification_question,
+        suggested_member_id=3,
+        missing_category_type=None,
+    )
     clarification_service = SimpleNamespace(
         get=AsyncMock(return_value=None), begin=AsyncMock(return_value=stored)
     )
@@ -572,8 +577,70 @@ async def test_plain_message_persists_member_clarification_with_buttons() -> Non
         question=result.clarification_question,
         ambiguous_member_name="Яна",
         suggested_member_id=3,
+        missing_category_type=None,
     )
     assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "Так"
+
+
+@pytest.mark.asyncio
+async def test_unknown_category_offers_existing_categories_and_creation() -> None:
+    processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=10,
+        text="незрозуміла витрата 20",
+        answer=AsyncMock(),
+        reply=AsyncMock(return_value=processing_message),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім'я", currency="EUR")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Андрій")
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(),
+        needs_clarification=True,
+        clarification_question="Оберіть категорію для «Незрозуміла витрата».",
+        ai_metadata={},
+        missing_category_type=TransactionType.EXPENSE,
+    )
+    stored = SimpleNamespace(
+        id=7,
+        question=result.clarification_question,
+        suggested_member_id=None,
+        missing_category_type="expense",
+    )
+    category = SimpleNamespace(
+        id=5,
+        name="Освіта",
+        code="education",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    clarification_service = SimpleNamespace(
+        get=AsyncMock(return_value=None), begin=AsyncMock(return_value=stored)
+    )
+
+    await recognize_plain_message(
+        message,
+        household,
+        member,
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        SimpleNamespace(create_pending=AsyncMock()),
+        clarification_service=clarification_service,
+        category_service=SimpleNamespace(list=AsyncMock(return_value=(category,))),
+    )
+
+    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert labels == ["Освіта", "➕ Створити нову категорію", "Скасувати"]
+    clarification_service.begin.assert_awaited_once_with(
+        household_id=1,
+        member_id=2,
+        original_message_id=10,
+        original_text=message.text,
+        question=result.clarification_question,
+        ambiguous_member_name=None,
+        suggested_member_id=None,
+        missing_category_type=TransactionType.EXPENSE,
+    )
 
 
 @pytest.mark.asyncio
@@ -603,7 +670,7 @@ async def test_followup_answer_resumes_original_message_and_remembers_alias() ->
         type=TransactionType.EXPENSE,
         amount=Decimal("120"),
         currency="EUR",
-        category_code="other",
+        category_code="education",
         description="Навчання французької",
         beneficiary_member_id=3,
         date="2026-10-10",

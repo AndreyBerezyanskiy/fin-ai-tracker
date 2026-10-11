@@ -17,11 +17,16 @@ from bot.keyboards.menu import (
 )
 from bot.keyboards.transactions import (
     BudgetActionCallback,
+    CategoryChoiceCallback,
     ClarificationCallback,
     TransactionActionCallback,
+    UncategorizedCallback,
     budget_status_keyboard,
+    category_choice_keyboard,
     clarification_keyboard,
     pending_transactions_keyboard,
+    transaction_category_keyboard,
+    uncategorized_transactions_keyboard,
 )
 
 __all__ = [
@@ -30,9 +35,12 @@ __all__ = [
     "SettingsMenuCallback",
     "TransactionActionCallback",
     "BudgetActionCallback",
+    "CategoryChoiceCallback",
     "ClarificationCallback",
+    "UncategorizedCallback",
     "clarification_keyboard",
     "budget_status_keyboard",
+    "category_choice_keyboard",
     "back_to_main_keyboard",
     "cancel_category_edit_keyboard",
     "category_detail_keyboard",
@@ -41,6 +49,8 @@ __all__ = [
     "main_menu_keyboard",
     "month_selection_keyboard",
     "pending_transactions_keyboard",
+    "transaction_category_keyboard",
+    "uncategorized_transactions_keyboard",
     "settings_keyboard",
     "stats_menu_keyboard",
     "timezone_keyboard",

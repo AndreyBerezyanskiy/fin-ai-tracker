@@ -35,9 +35,12 @@ CATEGORIES = (
     CategoryDefinition("entertainment", "Розваги", TransactionType.EXPENSE),
     CategoryDefinition("travel", "Подорожі", TransactionType.EXPENSE),
     CategoryDefinition("subscriptions", "Підписки", TransactionType.EXPENSE),
-    CategoryDefinition("other", "Інше", TransactionType.EXPENSE),
+    CategoryDefinition("gifts", "Подарунки", TransactionType.EXPENSE),
+    CategoryDefinition("education", "Освіта", TransactionType.EXPENSE),
+    CategoryDefinition("taxes_documents", "Податки та документи", TransactionType.EXPENSE),
     CategoryDefinition("salary", "Зарплата", TransactionType.INCOME),
-    CategoryDefinition("other_income", "Інший дохід", TransactionType.INCOME),
+    CategoryDefinition("refunds", "Повернення коштів", TransactionType.INCOME),
+    CategoryDefinition("bonus", "Бонуси", TransactionType.INCOME),
 )
 
 
@@ -177,18 +180,18 @@ EXAMPLES = (
     ),
     Example(
         "подарунок 30",
-        (transaction("expense", "30", "other", "Подарунок"),),
-        (("30.00", "other", "2026-10-07", "expense"),),
+        (transaction("expense", "30", "gifts", "Подарунок"),),
+        (("30.00", "gifts", "2026-10-07", "expense"),),
     ),
     Example(
         "повернули 15 євро",
-        (transaction("income", "15", "other_income", "Повернення"),),
-        (("15.00", "other_income", "2026-10-07", "income"),),
+        (transaction("income", "15", "refunds", "Повернення"),),
+        (("15.00", "refunds", "2026-10-07", "income"),),
     ),
     Example(
         "remboursement 42,75",
-        (transaction("income", "42.75", "other_income", "Remboursement"),),
-        (("42.75", "other_income", "2026-10-07", "income"),),
+        (transaction("income", "42.75", "refunds", "Remboursement"),),
+        (("42.75", "refunds", "2026-10-07", "income"),),
     ),
     Example(
         "06.10 продукти 19.80",
@@ -233,8 +236,8 @@ EXAMPLES = (
     ),
     Example(
         "bonus 300 reçu aujourd'hui",
-        (transaction("income", "300", "other_income", "Bonus"),),
-        (("300.00", "other_income", "2026-10-07", "income"),),
+        (transaction("income", "300", "bonus", "Bonus"),),
+        (("300.00", "bonus", "2026-10-07", "income"),),
     ),
 )
 
@@ -399,7 +402,7 @@ async def test_invalid_date_is_rejected() -> None:
     assert "дату" in (result.clarification_question or "")
 
 
-async def test_unknown_category_falls_back_to_other() -> None:
+async def test_unknown_category_requires_user_choice() -> None:
     parsed = AIRecognitionResponse(
         intent=RecognitionIntent.CREATE_TRANSACTIONS,
         transactions=[
@@ -413,8 +416,10 @@ async def test_unknown_category_falls_back_to_other() -> None:
 
     result, _parse = await run_recognition(parsed)
 
-    assert result.transactions[0].category_code == "other"
-    assert result.needs_clarification is False
+    assert result.transactions == ()
+    assert result.needs_clarification is True
+    assert result.missing_category_type is TransactionType.EXPENSE
+    assert "Оберіть категорію" in (result.clarification_question or "")
 
 
 async def test_metadata_is_minimal_and_excludes_message() -> None:
@@ -518,7 +523,7 @@ async def test_clarification_context_and_member_aliases_are_sent_to_ai() -> None
 
 def test_ai_schema_rejects_unsupported_transaction_type() -> None:
     with pytest.raises(ValidationError):
-        AITransactionCandidate.model_validate(transaction("transfer", "20", "other", "Transfer"))
+        AITransactionCandidate.model_validate(transaction("transfer", "20", "gifts", "Transfer"))
 
 
 def test_example_set_has_at_least_thirty_messages() -> None:

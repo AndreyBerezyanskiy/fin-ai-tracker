@@ -130,6 +130,21 @@ async def test_household_and_member_are_created_idempotently(session: AsyncSessi
 
 
 @pytest.mark.asyncio
+async def test_fallback_categories_are_removed_from_effective_schema(
+    session: AsyncSession,
+) -> None:
+    household = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100126, name="Категорії"
+    )
+    categories = await CategoryRepository(session).list_available(household.id)
+    codes = {item.code for item in categories}
+
+    assert "other" not in codes
+    assert "other_income" not in codes
+    assert {"education", "taxes_documents", "gifts", "refunds", "bonus"} <= codes
+
+
+@pytest.mark.asyncio
 async def test_telegram_update_is_claimed_once_and_can_be_released(session: AsyncSession) -> None:
     repository = ProcessedTelegramUpdateRepository(session)
 
@@ -198,6 +213,58 @@ async def test_clarification_and_alias_survive_separate_database_sessions(
     assert alias.normalized_alias == "яна"
     assert alias.member_id == beneficiary_id
     assert clarification_count == 0
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_transaction_can_be_reassigned(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Перекласифікація"
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=77,
+            display_name="Автор",
+        )
+        education = await CategoryRepository(db_session).get_effective_by_code(
+            household.id, "education"
+        )
+        assert education is not None
+        transaction = Transaction(
+            household_id=household.id,
+            member_id=member.id,
+            beneficiary_member_id=member.id,
+            category_id=None,
+            type=TransactionType.EXPENSE,
+            amount=Decimal("120.00"),
+            currency="EUR",
+            description="Навчання французької",
+            transaction_date=date(2026, 10, 10),
+            original_text="Яна навчання французької 120",
+            telegram_chat_id=household.telegram_chat_id,
+            telegram_message_id=701,
+            status=TransactionStatus.CONFIRMED,
+        )
+        db_session.add(transaction)
+        await db_session.flush()
+        household_id = household.id
+        transaction_id = transaction.id
+        education_id = education.id
+
+    service = TransactionService(service_session_factory)
+    uncategorized = await service.list_uncategorized(household_id=household_id)
+    assert [item.id for item in uncategorized] == [transaction_id]
+
+    updated = await service.assign_category(
+        household_id=household_id,
+        transaction_id=transaction_id,
+        category_id=education_id,
+    )
+    assert updated is not None
+    assert updated.category_id == education_id
+    assert await service.list_uncategorized(household_id=household_id) == ()
 
 
 @pytest.mark.asyncio
@@ -304,7 +371,7 @@ async def test_category_and_budget_crud(session: AsyncSession) -> None:
     )
 
     assert category in available
-    assert {item.code for item in income_categories} == {"salary", "other_income"}
+    assert {item.code for item in income_categories} == {"salary", "refunds", "bonus"}
     assert updated.id == budget.id
     assert updated.amount == Decimal("125.00")
 

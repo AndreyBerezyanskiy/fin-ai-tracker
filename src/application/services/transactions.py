@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.enums import TransactionStatus
 from domain.models import RecognitionResult
-from infrastructure.database import Household, Member, Transaction, session_scope
+from infrastructure.database import Category, Household, Member, Transaction, session_scope
 from infrastructure.repositories import CategoryRepository, TransactionRepository
 
 
@@ -96,6 +96,35 @@ class TransactionService:
                 household_id, limit=limit, currency=currency
             )
             return tuple(transactions)
+
+    async def list_uncategorized(
+        self, *, household_id: int, limit: int = 20
+    ) -> tuple[Transaction, ...]:
+        async with self.session_factory() as session:
+            return tuple(
+                await TransactionRepository(session).list_uncategorized(
+                    household_id=household_id, limit=limit
+                )
+            )
+
+    async def get(self, *, household_id: int, transaction_id: int) -> Transaction | None:
+        async with self.session_factory() as session:
+            return await TransactionRepository(session).get_for_household(
+                household_id=household_id, transaction_id=transaction_id
+            )
+
+    async def assign_category(
+        self, *, household_id: int, transaction_id: int, category_id: int
+    ) -> Transaction | None:
+        async with session_scope(self.session_factory) as session:
+            repository = TransactionRepository(session)
+            transaction = await repository.get_for_household(
+                household_id=household_id, transaction_id=transaction_id
+            )
+            category: Category | None = await CategoryRepository(session).get(category_id)
+            if transaction is None or category is None:
+                return None
+            return await repository.assign_category(transaction=transaction, category=category)
 
     async def confirmed_balance(self, *, household_id: int, currency: str | None = None) -> Decimal:
         async with self.session_factory() as session:

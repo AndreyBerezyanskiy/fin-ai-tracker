@@ -115,6 +115,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="set_budget", description="Встановити місячний бюджет"),
             BotCommand(command="set_category_budget", description="Встановити ліміт категорії"),
             BotCommand(command="last", description="Останні операції"),
+            BotCommand(command="uncategorized", description="Операції без категорії"),
             BotCommand(command="stats", description="Статистика за категоріями"),
             BotCommand(command="categories", description="Керування категоріями"),
             BotCommand(command="undo", description="Скасувати останню операцію"),

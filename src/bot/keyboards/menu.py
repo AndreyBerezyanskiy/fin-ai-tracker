@@ -28,6 +28,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [_menu_button("🧾 Останні операції", "last"), _menu_button("📊 Статистика", "stats")],
+            [_menu_button("🗂 Без категорії", "uncategorized")],
             [_menu_button("🏷 Категорії", "categories"), _menu_button("⚙️ Налаштування", "settings")],
             [_menu_button("↩️ Скасувати останню", "undo")],
         ]

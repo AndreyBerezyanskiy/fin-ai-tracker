@@ -10,7 +10,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from application.services import CategoryService, HouseholdSettingsService, TransactionService
-from bot.handlers.commands import _currency_prefix, _format_transaction_line, _stats_period, _today
+from bot.handlers.commands import (
+    _currency_prefix,
+    _format_transaction_line,
+    _stats_period,
+    _today,
+    _uncategorized_text,
+)
 from bot.keyboards import (
     CategoryMenuCallback,
     MenuCallback,
@@ -25,6 +31,7 @@ from bot.keyboards import (
     settings_keyboard,
     stats_menu_keyboard,
     timezone_keyboard,
+    uncategorized_transactions_keyboard,
 )
 from domain.enums import TransactionType
 from infrastructure.database import Category, Household, Member
@@ -152,6 +159,18 @@ async def menu_callback(
         if not transactions:
             lines.append("Операцій ще немає.")
         await _edit(callback, "\n".join(lines), reply_markup=back_to_main_keyboard())
+        return
+    if section == "uncategorized":
+        transactions = await transaction_service.list_uncategorized(household_id=household.id)
+        await _edit(
+            callback,
+            _uncategorized_text(transactions),
+            reply_markup=(
+                uncategorized_transactions_keyboard(transactions)
+                if transactions
+                else back_to_main_keyboard()
+            ),
+        )
         return
     if section == "undo":
         transaction = await transaction_service.undo_last(

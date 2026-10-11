@@ -158,6 +158,10 @@ class TransactionClarification(TimestampMixin, Base):
     suggested_member_id: Mapped[int | None] = mapped_column(
         ForeignKey("members.id", ondelete="SET NULL"), nullable=True
     )
+    missing_category_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    awaiting_category_name: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
 
 class ProcessedTelegramUpdate(Base):
@@ -223,8 +227,8 @@ class Transaction(TimestampMixin, Base):
     beneficiary_member_id: Mapped[int] = mapped_column(
         ForeignKey("members.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    category_id: Mapped[int] = mapped_column(
-        ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False, index=True
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     type: Mapped[TransactionType] = mapped_column(transaction_type_enum, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
@@ -255,7 +259,7 @@ class Transaction(TimestampMixin, Base):
     beneficiary: Mapped[Member] = relationship(
         back_populates="beneficiary_transactions", foreign_keys=[beneficiary_member_id]
     )
-    category: Mapped[Category] = relationship(back_populates="transactions")
+    category: Mapped[Category | None] = relationship(back_populates="transactions")
 
 
 class Budget(TimestampMixin, Base):

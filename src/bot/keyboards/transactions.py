@@ -1,5 +1,9 @@
+from collections.abc import Iterable
+
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from infrastructure.database import Category, Transaction
 
 
 class TransactionActionCallback(CallbackData, prefix="transaction"):
@@ -14,6 +18,18 @@ class ClarificationCallback(CallbackData, prefix="clarify"):
 
 class BudgetActionCallback(CallbackData, prefix="budget"):
     action: str
+
+
+class CategoryChoiceCallback(CallbackData, prefix="choosecat"):
+    action: str
+    clarification_id: int
+    category_id: int
+
+
+class UncategorizedCallback(CallbackData, prefix="uncat"):
+    action: str
+    transaction_id: int
+    category_id: int
 
 
 def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
@@ -86,11 +102,99 @@ def budget_status_keyboard(*, can_set_from_income: bool) -> InlineKeyboardMarkup
     )
 
 
+def category_choice_keyboard(
+    clarification_id: int, categories: Iterable[Category]
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=category.name,
+                callback_data=CategoryChoiceCallback(
+                    action="select",
+                    clarification_id=clarification_id,
+                    category_id=category.id,
+                ).pack(),
+            )
+        ]
+        for category in categories
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="➕ Створити нову категорію",
+                    callback_data=CategoryChoiceCallback(
+                        action="new", clarification_id=clarification_id, category_id=0
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Скасувати",
+                    callback_data=ClarificationCallback(
+                        action="cancel", clarification_id=clarification_id
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def uncategorized_transactions_keyboard(
+    transactions: Iterable[Transaction],
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"#{transaction.id} {(transaction.description or 'Без опису')[:30]}",
+                callback_data=UncategorizedCallback(
+                    action="open", transaction_id=transaction.id, category_id=0
+                ).pack(),
+            )
+        ]
+        for transaction in transactions
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def transaction_category_keyboard(
+    transaction_id: int, categories: Iterable[Category]
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=category.name,
+                callback_data=UncategorizedCallback(
+                    action="assign", transaction_id=transaction_id, category_id=category.id
+                ).pack(),
+            )
+        ]
+        for category in categories
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Створити нову категорію",
+                callback_data=UncategorizedCallback(
+                    action="new", transaction_id=transaction_id, category_id=0
+                ).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 __all__ = [
     "ClarificationCallback",
     "BudgetActionCallback",
+    "CategoryChoiceCallback",
     "TransactionActionCallback",
+    "UncategorizedCallback",
     "clarification_keyboard",
     "budget_status_keyboard",
+    "category_choice_keyboard",
     "pending_transactions_keyboard",
+    "transaction_category_keyboard",
+    "uncategorized_transactions_keyboard",
 ]

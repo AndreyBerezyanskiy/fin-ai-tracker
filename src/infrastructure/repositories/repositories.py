@@ -256,6 +256,7 @@ class TransactionClarificationRepository:
         expires_at: datetime,
         ambiguous_member_name: str | None,
         suggested_member_id: int | None,
+        missing_category_type: str | None,
     ) -> TransactionClarification:
         values = {
             "household_id": household_id,
@@ -267,6 +268,8 @@ class TransactionClarificationRepository:
             "expires_at": expires_at,
             "ambiguous_member_name": ambiguous_member_name,
             "suggested_member_id": suggested_member_id,
+            "missing_category_type": missing_category_type,
+            "awaiting_category_name": False,
         }
         statement = (
             insert(TransactionClarification)
@@ -289,12 +292,16 @@ class TransactionClarificationRepository:
         expires_at: datetime,
         ambiguous_member_name: str | None,
         suggested_member_id: int | None,
+        missing_category_type: str | None,
+        awaiting_category_name: bool = False,
     ) -> TransactionClarification:
         clarification.question = question
         clarification.attempts = attempts
         clarification.expires_at = expires_at
         clarification.ambiguous_member_name = ambiguous_member_name
         clarification.suggested_member_id = suggested_member_id
+        clarification.missing_category_type = missing_category_type
+        clarification.awaiting_category_name = awaiting_category_name
         await self.session.flush()
         return clarification
 
@@ -417,6 +424,52 @@ class TransactionRepository:
 
     async def get(self, transaction_id: int) -> Transaction | None:
         return await self.session.get(Transaction, transaction_id)
+
+    async def get_for_household(
+        self, *, household_id: int, transaction_id: int
+    ) -> Transaction | None:
+        return await self.session.scalar(
+            select(Transaction)
+            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+            .where(
+                Transaction.id == transaction_id,
+                Transaction.household_id == household_id,
+            )
+        )
+
+    async def list_uncategorized(
+        self, *, household_id: int, limit: int = 20
+    ) -> list[Transaction]:
+        return list(
+            await self.session.scalars(
+                select(Transaction)
+                .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+                .where(
+                    Transaction.household_id == household_id,
+                    Transaction.category_id.is_(None),
+                    Transaction.status.in_(
+                        (TransactionStatus.PENDING, TransactionStatus.CONFIRMED)
+                    ),
+                )
+                .order_by(
+                    Transaction.transaction_date.desc(),
+                    Transaction.id.desc(),
+                )
+                .limit(limit)
+            )
+        )
+
+    async def assign_category(
+        self, *, transaction: Transaction, category: Category
+    ) -> Transaction:
+        if category.household_id not in (None, transaction.household_id):
+            raise InvalidTransactionReferenceError("Category is not available to household")
+        if category.type is not transaction.type:
+            raise InvalidTransactionReferenceError("Category type does not match transaction type")
+        transaction.category_id = category.id
+        transaction.category = category
+        await self.session.flush()
+        return transaction
 
     async def get_by_telegram_message(
         self, telegram_chat_id: int, telegram_message_id: int

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -37,8 +38,8 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Не конвертуй валюти.
 - Для «сьогодні» та «вчора» обчисли календарну дату з переданих local_date і timezone.
 - date поверни у форматі YYYY-MM-DD.
-- Використовуй лише передані category_code. Якщо категорія витрати незрозуміла,
-  використовуй other; для незрозумілого доходу використовуй other_income.
+- Використовуй лише передані category_code. Якщо категорію неможливо однозначно визначити,
+  поверни category_code=null, needs_clarification=true і попроси користувача обрати категорію.
 - description має бути коротким змістовним описом без суми, дати та валюти.
 - Якщо явно вказано, для кого операція, поверни id цієї людини з allowed_members у
   beneficiary_member_id. Якщо людину не вказано, поверни null. Не вигадуй учасників.
@@ -52,6 +53,12 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Якщо повідомлення не описує фінансову операцію, intent=not_a_transaction і transactions=[].
 - Якщо сума або тип відсутні, залиш відповідне поле null і попроси коротке уточнення.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class _CategoryClarification:
+    question: str
+    transaction_type: TransactionType
 
 
 class OpenAITransactionRecognizer:
@@ -135,6 +142,12 @@ class OpenAITransactionRecognizer:
                 allowed_member_ids=allowed_member_ids,
                 default_member_id=default_member_id,
             )
+            if isinstance(transaction_or_question, _CategoryClarification):
+                return self._clarification(
+                    transaction_or_question.question,
+                    metadata,
+                    missing_category_type=transaction_or_question.transaction_type,
+                )
             if isinstance(transaction_or_question, str):
                 return self._clarification(transaction_or_question, metadata)
             validated.append(transaction_or_question)
@@ -194,7 +207,7 @@ class OpenAITransactionRecognizer:
         category_by_code: dict[str, CategoryDefinition],
         allowed_member_ids: set[int],
         default_member_id: int | None,
-    ) -> RecognizedTransaction | str:
+    ) -> RecognizedTransaction | str | _CategoryClarification:
         if candidate.amount is None or candidate.type is None:
             return MISSING_AMOUNT_OR_TYPE_QUESTION
 
@@ -222,13 +235,15 @@ class OpenAITransactionRecognizer:
         except ValueError:
             return INVALID_DATE_QUESTION
 
-        category_code = candidate.category_code or self._fallback_category(candidate.type)
-        category = category_by_code.get(category_code)
+        category = (
+            category_by_code.get(candidate.category_code) if candidate.category_code else None
+        )
         if category is None or category.type is not candidate.type:
-            category_code = self._fallback_category(candidate.type)
-            category = category_by_code.get(category_code)
-        if category is None or category.type is not candidate.type:
-            return "Не вдалося визначити доступну категорію операції."
+            description = (candidate.description or "операції").strip()[:100]
+            return _CategoryClarification(
+                question=f"Оберіть категорію для «{description}».",
+                transaction_type=candidate.type,
+            )
 
         beneficiary_member_id = candidate.beneficiary_member_id or default_member_id
         if beneficiary_member_id is not None and beneficiary_member_id not in allowed_member_ids:
@@ -248,10 +263,6 @@ class OpenAITransactionRecognizer:
             return INVALID_AMOUNT_QUESTION
 
     @staticmethod
-    def _fallback_category(transaction_type: TransactionType) -> str:
-        return "other" if transaction_type is TransactionType.EXPENSE else "other_income"
-
-    @staticmethod
     def _safe_question(question: str | None) -> str:
         if question and question.strip():
             return question.strip()[:200]
@@ -264,6 +275,7 @@ class OpenAITransactionRecognizer:
         *,
         ambiguous_member_name: str | None = None,
         suggested_member_id: int | None = None,
+        missing_category_type: TransactionType | None = None,
     ) -> RecognitionResult:
         return RecognitionResult(
             intent=RecognitionIntent.CREATE_TRANSACTIONS,
@@ -273,6 +285,7 @@ class OpenAITransactionRecognizer:
             ai_metadata=metadata,
             ambiguous_member_name=ambiguous_member_name,
             suggested_member_id=suggested_member_id,
+            missing_category_type=missing_category_type,
         )
 
     @staticmethod

@@ -7,7 +7,9 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ErrorEvent, Message, ReactionTypeEmoji
 
 from application.rate_limit import AIRateLimiter
@@ -28,12 +30,17 @@ from application.services import (
 from application.services.clarifications import MAX_CLARIFICATION_ATTEMPTS
 from bot.keyboards import (
     BudgetActionCallback,
+    CategoryChoiceCallback,
     ClarificationCallback,
     TransactionActionCallback,
+    UncategorizedCallback,
     budget_status_keyboard,
+    category_choice_keyboard,
     clarification_keyboard,
     main_menu_keyboard,
     pending_transactions_keyboard,
+    transaction_category_keyboard,
+    uncategorized_transactions_keyboard,
 )
 from domain.enums import ReportType, TransactionStatus, TransactionType
 from domain.models import RecognitionIntent
@@ -60,6 +67,7 @@ HELP_TEXT = """Доступні команди:
 /set_budget 2000 — встановити ліміт витрат на поточний місяць
 /set_category_budget groceries 600 — встановити ліміт категорії
 /last — останні підтверджені операції
+/uncategorized — операції, яким потрібно призначити категорію
 /undo — скасувати свою останню підтверджену операцію
 /cancel — скасувати активне уточнення
 /categories — список категорій
@@ -72,6 +80,10 @@ HELP_TEXT = """Доступні команди:
 
 Надсилайте витрати й доходи звичайним текстом, наприклад: «кава 4,50».
 Щоб бот надалі бачив такі повідомлення, вимкніть Privacy Mode через @BotFather."""
+
+
+class TransactionCategoryStates(StatesGroup):
+    new_name = State()
 
 
 def _format_totals(title: str, totals: PeriodTotals, currency: str) -> str:
@@ -468,6 +480,35 @@ def _format_transactions(
     return "\n".join(lines)
 
 
+async def _answer_clarification_question(
+    message: Message,
+    *,
+    clarification: TransactionClarification,
+    household: Household,
+    category_service: CategoryService | None,
+) -> None:
+    missing_category_type = getattr(clarification, "missing_category_type", None)
+    if missing_category_type and category_service is not None:
+        transaction_type = TransactionType(missing_category_type)
+        categories = tuple(
+            category
+            for category in await category_service.list(household.id)
+            if category.is_active and category.type is transaction_type
+        )
+        await message.answer(
+            clarification.question,
+            reply_markup=category_choice_keyboard(clarification.id, categories),
+        )
+        return
+    await message.answer(
+        clarification.question,
+        reply_markup=clarification_keyboard(
+            clarification.id,
+            has_suggestion=clarification.suggested_member_id is not None,
+        ),
+    )
+
+
 async def recognize_plain_message(
     message: Message,
     household: Household,
@@ -476,6 +517,7 @@ async def recognize_plain_message(
     transaction_service: TransactionService,
     ai_rate_limiter: AIRateLimiter | None = None,
     clarification_service: ClarificationService | None = None,
+    category_service: CategoryService | None = None,
     max_message_length: int = 1000,
     store_original_text: bool = True,
 ) -> None:
@@ -500,6 +542,35 @@ async def recognize_plain_message(
                     "Час на уточнення минув. Надішліть список операцій ще раз."
                 )
                 return
+            if clarification.awaiting_category_name:
+                if category_service is None or not clarification.missing_category_type:
+                    await message.answer("Не вдалося створити категорію. Скасуйте уточнення.")
+                    return
+                name = message.text.strip()[:255]
+                if not name or name.startswith("/"):
+                    await message.answer("Введіть назву категорії або скористайтеся /cancel.")
+                    return
+                category = await category_service.add(
+                    household_id=household.id,
+                    transaction_type=TransactionType(clarification.missing_category_type),
+                    name=name,
+                )
+                await _resolve_clarification(
+                    message,
+                    answer=(
+                        f"Створено й обрано категорію «{category.name}» "
+                        f"з кодом {category.code}."
+                    ),
+                    clarification=clarification,
+                    household=household,
+                    member=member,
+                    transaction_recognition_service=transaction_recognition_service,
+                    transaction_service=transaction_service,
+                    clarification_service=clarification_service,
+                    category_service=category_service,
+                    store_original_text=store_original_text,
+                )
+                return
             await _resolve_clarification(
                 message,
                 answer=message.text,
@@ -509,6 +580,7 @@ async def recognize_plain_message(
                 transaction_recognition_service=transaction_recognition_service,
                 transaction_service=transaction_service,
                 clarification_service=clarification_service,
+                category_service=category_service,
                 store_original_text=store_original_text,
             )
             return
@@ -546,13 +618,13 @@ async def recognize_plain_message(
                 question=result.clarification_question or "Уточніть операцію, будь ласка.",
                 ambiguous_member_name=result.ambiguous_member_name,
                 suggested_member_id=result.suggested_member_id,
+                missing_category_type=result.missing_category_type,
             )
-            await message.answer(
-                clarification.question,
-                reply_markup=clarification_keyboard(
-                    clarification.id,
-                    has_suggestion=clarification.suggested_member_id is not None,
-                ),
+            await _answer_clarification_question(
+                message,
+                clarification=clarification,
+                household=household,
+                category_service=category_service,
             )
             return
         pending = await transaction_service.create_pending(
@@ -591,6 +663,7 @@ async def _resolve_clarification(
     transaction_recognition_service: TransactionRecognitionService,
     transaction_service: TransactionService,
     clarification_service: ClarificationService,
+    category_service: CategoryService | None,
     store_original_text: bool,
 ) -> None:
     processing_message: Message | None = None
@@ -622,13 +695,14 @@ async def _resolve_clarification(
                 question=question,
                 ambiguous_member_name=result.ambiguous_member_name,
                 suggested_member_id=result.suggested_member_id,
+                missing_category_type=result.missing_category_type,
             )
             if updated is not None:
-                await message.answer(
-                    updated.question,
-                    reply_markup=clarification_keyboard(
-                        updated.id, has_suggestion=updated.suggested_member_id is not None
-                    ),
+                await _answer_clarification_question(
+                    message,
+                    clarification=updated,
+                    household=household,
+                    category_service=category_service,
                 )
             return
 
@@ -675,11 +749,16 @@ async def cancel_clarification_command(
     household: Household,
     member: Member,
     clarification_service: ClarificationService,
+    state: FSMContext,
 ) -> None:
     cancelled = await clarification_service.cancel_for_member(
         household_id=household.id, member_id=member.id
     )
-    await message.answer("Уточнення скасовано." if cancelled else "Активного уточнення немає.")
+    had_state = await state.get_state() is not None
+    await state.clear()
+    await message.answer(
+        "Уточнення скасовано." if cancelled or had_state else "Активного уточнення немає."
+    )
 
 
 async def clarification_callback(
@@ -690,6 +769,7 @@ async def clarification_callback(
     transaction_recognition_service: TransactionRecognitionService,
     transaction_service: TransactionService,
     clarification_service: ClarificationService,
+    category_service: CategoryService | None = None,
     store_original_text: bool = True,
 ) -> None:
     clarification = await clarification_service.get_by_id(callback_data.clarification_id)
@@ -744,6 +824,74 @@ async def clarification_callback(
         transaction_recognition_service=transaction_recognition_service,
         transaction_service=transaction_service,
         clarification_service=clarification_service,
+        category_service=category_service,
+        store_original_text=store_original_text,
+    )
+
+
+async def category_choice_callback(
+    callback: CallbackQuery,
+    callback_data: CategoryChoiceCallback,
+    household: Household,
+    member: Member,
+    transaction_recognition_service: TransactionRecognitionService,
+    transaction_service: TransactionService,
+    clarification_service: ClarificationService,
+    category_service: CategoryService,
+    store_original_text: bool = True,
+) -> None:
+    clarification = await clarification_service.get_by_id(callback_data.clarification_id)
+    if (
+        clarification is None
+        or clarification.household_id != household.id
+        or clarification.member_id != member.id
+        or not clarification.missing_category_type
+    ):
+        await callback.answer("Це уточнення вже неактивне.", show_alert=True)
+        return
+    if clarification.expires_at <= datetime.now(UTC):
+        await clarification_service.cancel(clarification.id)
+        await callback.answer("Час на уточнення минув.", show_alert=True)
+        return
+    if callback_data.action == "new":
+        updated = await clarification_service.request_category_name(clarification.id)
+        if callback.message is not None and updated is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(updated.question)
+        await callback.answer()
+        return
+    if callback_data.action != "select":
+        await callback.answer("Невідома дія.", show_alert=True)
+        return
+    transaction_type = TransactionType(clarification.missing_category_type)
+    category = next(
+        (
+            item
+            for item in await category_service.list(household.id)
+            if item.id == callback_data.category_id
+            and item.is_active
+            and item.type is transaction_type
+        ),
+        None,
+    )
+    if category is None:
+        await callback.answer("Категорія недоступна.", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer("Не вдалося обробити відповідь.", show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    await _resolve_clarification(
+        callback.message,
+        answer=f"Обрана категорія «{category.name}» з кодом {category.code}.",
+        clarification=clarification,
+        household=household,
+        member=member,
+        transaction_recognition_service=transaction_recognition_service,
+        transaction_service=transaction_service,
+        clarification_service=clarification_service,
+        category_service=category_service,
         store_original_text=store_original_text,
     )
 
@@ -843,6 +991,124 @@ async def undo_command(
         await message.answer("Немає підтвердженої операції для скасування.")
         return
     await message.answer(f"Скасовано: {_format_transaction_line(transaction)}")
+
+
+def _uncategorized_text(transactions: tuple[object, ...]) -> str:
+    if not transactions:
+        return "Усі операції мають категорії."
+    lines = ["Операції без категорії:"]
+    lines.extend(
+        f"• #{item.id} {_format_transaction_line(item)} · {item.transaction_date:%d.%m.%Y}"  # type: ignore[attr-defined]
+        for item in transactions
+    )
+    lines.append("\nОберіть операцію, щоб призначити категорію.")
+    return "\n".join(lines)
+
+
+async def uncategorized_command(
+    message: Message,
+    household: Household,
+    transaction_service: TransactionService,
+) -> None:
+    transactions = await transaction_service.list_uncategorized(household_id=household.id)
+    await message.answer(
+        _uncategorized_text(transactions),
+        reply_markup=(
+            uncategorized_transactions_keyboard(transactions) if transactions else None
+        ),
+    )
+
+
+async def uncategorized_callback(
+    callback: CallbackQuery,
+    callback_data: UncategorizedCallback,
+    household: Household,
+    transaction_service: TransactionService,
+    category_service: CategoryService,
+    state: FSMContext,
+) -> None:
+    transaction = await transaction_service.get(
+        household_id=household.id, transaction_id=callback_data.transaction_id
+    )
+    if transaction is None or transaction.category_id is not None:
+        await callback.answer("Операцію не знайдено або категорію вже призначено.", show_alert=True)
+        return
+    categories = tuple(
+        item
+        for item in await category_service.list(household.id)
+        if item.is_active and item.type is transaction.type
+    )
+    if callback_data.action == "open":
+        if callback.message is not None:
+            await callback.message.edit_text(
+                f"Оберіть категорію для:\n{_format_transaction_line(transaction)}",
+                reply_markup=transaction_category_keyboard(transaction.id, categories),
+            )
+        await callback.answer()
+        return
+    if callback_data.action == "new":
+        await state.set_state(TransactionCategoryStates.new_name)
+        await state.update_data(transaction_id=transaction.id)
+        if callback.message is not None:
+            await callback.message.answer("Введіть назву нової категорії або /cancel.")
+        await callback.answer()
+        return
+    if callback_data.action != "assign":
+        await callback.answer("Невідома дія.", show_alert=True)
+        return
+    category = next((item for item in categories if item.id == callback_data.category_id), None)
+    if category is None:
+        await callback.answer("Категорія недоступна.", show_alert=True)
+        return
+    updated = await transaction_service.assign_category(
+        household_id=household.id,
+        transaction_id=transaction.id,
+        category_id=category.id,
+    )
+    if updated is None:
+        await callback.answer("Не вдалося оновити операцію.", show_alert=True)
+        return
+    if callback.message is not None:
+        await callback.message.edit_text(
+            f"Категорію призначено: {category.name}\n{_format_transaction_line(updated)}"
+        )
+    await callback.answer("Категорію призначено.")
+
+
+async def new_transaction_category_name(
+    message: Message,
+    household: Household,
+    transaction_service: TransactionService,
+    category_service: CategoryService,
+    state: FSMContext,
+) -> None:
+    name = (message.text or "").strip()[:255]
+    if not name or name.startswith("/"):
+        await message.answer("Введіть назву категорії або /cancel.")
+        return
+    data = await state.get_data()
+    transaction = await transaction_service.get(
+        household_id=household.id, transaction_id=data["transaction_id"]
+    )
+    if transaction is None or transaction.category_id is not None:
+        await state.clear()
+        await message.answer("Операцію не знайдено або категорію вже призначено.")
+        return
+    category = await category_service.add(
+        household_id=household.id,
+        transaction_type=transaction.type,
+        name=name,
+    )
+    await transaction_service.assign_category(
+        household_id=household.id,
+        transaction_id=transaction.id,
+        category_id=category.id,
+    )
+    await state.clear()
+    await message.answer(
+        f"Створено категорію «{category.name}» і призначено операції "
+        f"#{transaction.id}."
+    )
 
 
 def _command_arguments(message: Message) -> str:
@@ -1027,6 +1293,7 @@ def create_commands_router() -> Router:
     router.message.register(set_budget_command, Command("set_budget"))
     router.message.register(set_category_budget_command, Command("set_category_budget"))
     router.message.register(last_command, Command("last"))
+    router.message.register(uncategorized_command, Command("uncategorized"))
     router.message.register(undo_command, Command("undo"))
     router.message.register(categories_command, Command("categories"))
     router.message.register(category_add_command, Command("category_add"))
@@ -1036,8 +1303,14 @@ def create_commands_router() -> Router:
     router.message.register(stats_command, Command("stats"))
     router.message.register(settings_command, Command("settings"))
     router.message.register(cancel_clarification_command, Command("cancel"))
+    router.message.register(
+        new_transaction_category_name,
+        StateFilter(TransactionCategoryStates.new_name),
+    )
     router.message.register(recognize_plain_message)
     router.callback_query.register(transaction_callback, TransactionActionCallback.filter())
     router.callback_query.register(clarification_callback, ClarificationCallback.filter())
+    router.callback_query.register(category_choice_callback, CategoryChoiceCallback.filter())
+    router.callback_query.register(uncategorized_callback, UncategorizedCallback.filter())
     router.callback_query.register(budget_callback, BudgetActionCallback.filter())
     return router
