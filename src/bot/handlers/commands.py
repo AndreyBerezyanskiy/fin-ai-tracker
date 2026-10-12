@@ -359,7 +359,7 @@ async def advice_command(
         logger.warning("AI advice unavailable: household_ref=%s", pseudonymize(household.id))
         await message.answer("Не вдалося сформувати надійну пораду. Спробуйте ще раз пізніше.")
         return
-    text = "Короткі спостереження:\n" + "\n".join(f"• {item}" for item in observations)
+    text = "💡 Поради для вашого бюджету\n\n" + "\n".join(f"• {item}" for item in observations)
     await message.answer(text)
 
 
@@ -472,6 +472,9 @@ def _format_transactions(
         if show_date_on_each_line:
             line += f" · {transaction.transaction_date:%d.%m.%Y}"  # type: ignore[attr-defined]
         lines.append(line)
+        category = getattr(transaction, "category", None)
+        if category is not None:
+            lines.append(f"🏷️ Категорія: {category.name}")
     if len(dates) == 1:
         transaction_date = next(iter(dates))
         lines.extend(["", f"Дата: {transaction_date:%d.%m.%Y}"])

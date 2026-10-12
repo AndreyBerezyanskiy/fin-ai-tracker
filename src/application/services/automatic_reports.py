@@ -24,7 +24,7 @@ class ReportSender(Protocol):
 
 
 class AutomaticReportService:
-    """Build and deliver deterministic reports, with AI used only for evening wording."""
+    """Build and deliver deterministic reports, with AI used only for evening advice."""
 
     def __init__(
         self,
@@ -113,15 +113,15 @@ class AutomaticReportService:
             end_date=local_date + timedelta(days=1),
             currency=household.currency,
         )
-        observation = await self._observation(household, local_date)
+        advice = await self._advice(household, local_date)
         return self._evening_text(
             expense=totals.expense,
             budget=budget,
             currency=household.currency,
-            observation=observation,
+            advice=advice,
         )
 
-    async def _observation(self, household: Household, local_date: date) -> str:
+    async def _advice(self, household: Household, local_date: date) -> str:
         try:
             observations = await self.advice_service.generate(
                 household_id=household.id,
@@ -134,8 +134,10 @@ class AutomaticReportService:
                 pseudonymize(household.id),
                 type(error).__name__,
             )
-            return "Автоматичне спостереження тимчасово недоступне."
-        return observations[0] if observations else "За цей місяць поки немає спостережень."
+            return "Персональна порада тимчасово недоступна."
+        if observations:
+            return observations[0]
+        return "Продовжуйте фіксувати витрати — скоро тут з’явиться персональна порада."
 
     async def _claim(self, household_id: int, report_type: ReportType, local_date: date) -> bool:
         async with session_scope(self.session_factory) as session:
@@ -156,9 +158,15 @@ class AutomaticReportService:
     @classmethod
     def _morning_text(cls, *, expense: Decimal, budget: BudgetStatus, currency: str) -> str:
         lines = [
-            "☀️ Ранковий звіт",
-            f"Витрати вчора: {cls._money(expense, currency)}",
-            cls._budget_line(budget, currency),
+            "☀️ Доброго ранку!",
+            "",
+            f"Учора витрачено {cls._money(expense, currency)}.",
+            "",
+            "📅 Цього місяця",
+            *cls._month_summary_lines(budget, currency),
+            "",
+            cls._limit_line(budget, currency),
+            "",
         ]
         approaching = [
             item
@@ -166,10 +174,10 @@ class AutomaticReportService:
             if item.percentage is not None and item.percentage >= 80
         ]
         if approaching:
-            lines.append("Категорії, що наближаються до ліміту:")
+            lines.append("⚠️ Наближаються до ліміту")
             lines.extend(f"• {item.name}: {item.percentage:.1f}%" for item in approaching)
         else:
-            lines.append("Категорій біля ліміту немає.")
+            lines.append("✅ Категорій біля ліміту немає.")
         return "\n".join(lines)
 
     @classmethod
@@ -179,29 +187,43 @@ class AutomaticReportService:
         expense: Decimal,
         budget: BudgetStatus,
         currency: str,
-        observation: str,
+        advice: str,
     ) -> str:
         return "\n".join(
             [
-                "🌙 Вечірній звіт",
-                f"Витрати сьогодні: {cls._money(expense, currency)}",
-                cls._budget_line(budget, currency),
-                f"Спостереження: {observation}",
+                "🌙 Підсумки дня",
+                "",
+                f"Сьогодні витрачено {cls._money(expense, currency)}.",
+                "",
+                "📅 Цього місяця",
+                *cls._month_summary_lines(budget, currency),
+                "",
+                f"💡 Порада: {advice}",
+                "",
+                cls._limit_line(budget, currency),
             ]
         )
 
     @classmethod
-    def _budget_line(cls, budget: BudgetStatus, currency: str) -> str:
-        cashflow = (
-            f"За місяць: надходження {cls._money(budget.income, currency)}, "
-            f"витрати {cls._money(budget.spent, currency)}, "
-            f"баланс {cls._signed_money(budget.balance, currency)}."
-        )
+    def _month_summary_lines(cls, budget: BudgetStatus, currency: str) -> list[str]:
+        balance_icon = "📈" if budget.balance >= 0 else "📉"
+        balance_status = "🟢" if budget.balance > 0 else "🔴" if budget.balance < 0 else "⚪"
+        return [
+            f"💰 Надійшло: {cls._money(budget.income, currency)}",
+            f"💸 Витрачено: {cls._money(budget.spent, currency)}",
+            (
+                f"{balance_icon} Баланс: "
+                f"{cls._signed_money(budget.balance, currency)} {balance_status}"
+            ),
+        ]
+
+    @classmethod
+    def _limit_line(cls, budget: BudgetStatus, currency: str) -> str:
         if budget.total_limit is None:
-            return f"{cashflow} Ліміт витрат не задано."
+            return "⚙️ Ліміт витрат не встановлено."
         percentage = "не визначено" if budget.percentage is None else f"{budget.percentage:.1f}%"
         return (
-            f"{cashflow} Ліміт витрат: {cls._money(budget.spent, currency)} з "
+            f"⚙️ Ліміт витрат: {cls._money(budget.spent, currency)} з "
             f"{cls._money(budget.total_limit, currency)} ({percentage})."
         )
 

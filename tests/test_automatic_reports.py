@@ -83,11 +83,13 @@ async def test_morning_report_contains_yesterday_budget_and_near_limits() -> Non
         local_date=date(2026, 10, 8),
     )
 
-    assert "Витрати вчора: €42.50" in text
-    assert "надходження €1200.00" in text
-    assert "баланс +€380.00" in text
-    assert "€820.00 з €1000.00 (82.0%)" in text
-    assert "Продукти: 82.0%" in text
+    assert text.startswith("☀️ Доброго ранку!\n\nУчора витрачено €42.50.")
+    assert "📅 Цього місяця" in text
+    assert "💰 Надійшло: €1200.00" in text
+    assert "💸 Витрачено: €820.00" in text
+    assert "📈 Баланс: +€380.00 🟢" in text
+    assert "⚙️ Ліміт витрат: €820.00 з €1000.00 (82.0%)." in text
+    assert "⚠️ Наближаються до ліміту\n• Продукти: 82.0%" in text
     report_service.totals.assert_awaited_once_with(
         household_id=7,
         start_date=date(2026, 10, 7),
@@ -123,10 +125,13 @@ async def test_evening_report_survives_temporary_openai_error() -> None:
         local_date=date(2026, 10, 8),
     )
 
-    assert "Витрати сьогодні: €15.00" in text
-    assert "баланс +€385.00" in text
-    assert "Ліміт витрат не задано" in text
-    assert "спостереження тимчасово недоступне" in text
+    assert text.startswith("🌙 Підсумки дня\n\nСьогодні витрачено €15.00.")
+    assert "📅 Цього місяця" in text
+    assert "💰 Надійшло: €500.00" in text
+    assert "💸 Витрачено: €115.00" in text
+    assert "📈 Баланс: +€385.00 🟢" in text
+    assert "⚙️ Ліміт витрат не встановлено." in text
+    assert "💡 Порада: Персональна порада тимчасово недоступна." in text
 
 
 @pytest.mark.asyncio

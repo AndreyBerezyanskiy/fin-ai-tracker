@@ -477,7 +477,11 @@ class TransactionRepository:
         return list(
             await self.session.scalars(
                 select(Transaction)
-                .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+                .options(
+                    selectinload(Transaction.member),
+                    selectinload(Transaction.beneficiary),
+                    selectinload(Transaction.category),
+                )
                 .where(
                     Transaction.telegram_chat_id == telegram_chat_id,
                     Transaction.telegram_message_id == telegram_message_id,
@@ -491,7 +495,11 @@ class TransactionRepository:
     ) -> list[Transaction]:
         statement = (
             select(Transaction)
-            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+            .options(
+                selectinload(Transaction.member),
+                selectinload(Transaction.beneficiary),
+                selectinload(Transaction.category),
+            )
             .where(
                 Transaction.household_id == household_id,
                 Transaction.telegram_message_id == telegram_message_id,

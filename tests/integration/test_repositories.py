@@ -440,6 +440,7 @@ async def test_pending_batch_confirm_last_and_undo_flow(
 
     assert len(first) == 2
     assert [item.beneficiary_member_id for item in first] == [beneficiary.id, member.id]
+    assert [item.category.name for item in first] == ["Здоров'я", "Продукти"]
     assert [item.id for item in duplicate] == [item.id for item in first]
     assert all(item.status is TransactionStatus.PENDING for item in first)
 

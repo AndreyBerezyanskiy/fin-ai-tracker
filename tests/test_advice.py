@@ -21,6 +21,7 @@ from application.services import (
 from application.services.advice import INSUFFICIENT_DATA_MESSAGE
 from domain.models import AIAdviceResponse
 from infrastructure.openai import InvalidAdviceError, OpenAIAdviceGenerator
+from infrastructure.openai.advisor import SYSTEM_PROMPT
 
 
 def advice_report() -> AdviceReport:
@@ -69,6 +70,9 @@ async def test_advice_uses_only_aggregate_report_and_structured_output() -> None
     request = parse.await_args.kwargs
     assert request["text_format"] is AIAdviceResponse
     assert request["store"] is False
+    assert request["instructions"] == SYSTEM_PROMPT
+    assert "цікавих і практичних" in request["instructions"]
+    assert "тепло, доброзичливо та позитивно" in request["instructions"]
     payload = json.loads(request["input"])
     assert payload["budget"] == "2000.00"
     assert payload["top_categories"] == [

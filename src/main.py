@@ -108,7 +108,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="today", description="Підсумок за сьогодні"),
             BotCommand(command="month", description="Підсумок за місяць"),
             BotCommand(command="budget", description="Стан бюджетів і лімітів"),
-            BotCommand(command="advice", description="Короткі спостереження про бюджет"),
+            BotCommand(command="advice", description="Персональні поради про бюджет"),
             BotCommand(command="report", description="Поточний стан бюджету"),
             BotCommand(command="reports_on", description="Увімкнути автоматичні звіти"),
             BotCommand(command="reports_off", description="Вимкнути автоматичні звіти"),

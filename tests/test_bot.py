@@ -472,8 +472,16 @@ async def test_plain_message_returns_recognized_transactions_in_ukrainian() -> N
     )
     member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена")
     service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+    pending_transaction = SimpleNamespace(
+        type=TransactionType.EXPENSE,
+        amount=Decimal("4.50"),
+        currency="EUR",
+        description="Кава",
+        transaction_date=datetime(2026, 10, 7).date(),
+        category=SimpleNamespace(name="Кафе та ресторани"),
+    )
     transaction_service = SimpleNamespace(
-        create_pending=AsyncMock(return_value=result.transactions)
+        create_pending=AsyncMock(return_value=(pending_transaction,))
     )
 
     await recognize_plain_message(message, household, member, service, transaction_service)
@@ -491,6 +499,7 @@ async def test_plain_message_returns_recognized_transactions_in_ukrainian() -> N
     answer = message.answer.await_args.args[0]
     assert "Знайдено 1 операцію" in answer
     assert "−€4.50" in answer
+    assert "🏷️ Категорія: Кафе та ресторани" in answer
     assert "Дата: 07.10.2026" in answer
     assert message.answer.await_args.kwargs["reply_markup"].inline_keyboard
     message.reply.assert_awaited_once_with("⏳ Обробляю…")
