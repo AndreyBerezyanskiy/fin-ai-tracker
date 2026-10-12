@@ -10,13 +10,21 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from domain.enums import ReportType, TransactionStatus, TransactionType
+from domain.enums import (
+    PlannedExpenseStatus,
+    ReminderKind,
+    ReportType,
+    TransactionStatus,
+    TransactionType,
+)
 from infrastructure.database.models import (
     Budget,
     Category,
     Household,
     Member,
     MemberAlias,
+    PlannedExpense,
+    PlannedExpenseDelivery,
     ProcessedTelegramUpdate,
     ReportDelivery,
     Transaction,
@@ -257,6 +265,8 @@ class TransactionClarificationRepository:
         ambiguous_member_name: str | None,
         suggested_member_id: int | None,
         missing_category_type: str | None,
+        kind: str = "transaction",
+        planned_expense_id: int | None = None,
     ) -> TransactionClarification:
         values = {
             "household_id": household_id,
@@ -270,6 +280,8 @@ class TransactionClarificationRepository:
             "suggested_member_id": suggested_member_id,
             "missing_category_type": missing_category_type,
             "awaiting_category_name": False,
+            "kind": kind,
+            "planned_expense_id": planned_expense_id,
         }
         statement = (
             insert(TransactionClarification)
@@ -294,6 +306,8 @@ class TransactionClarificationRepository:
         suggested_member_id: int | None,
         missing_category_type: str | None,
         awaiting_category_name: bool = False,
+        kind: str | None = None,
+        planned_expense_id: int | None = None,
     ) -> TransactionClarification:
         clarification.question = question
         clarification.attempts = attempts
@@ -302,6 +316,10 @@ class TransactionClarificationRepository:
         clarification.suggested_member_id = suggested_member_id
         clarification.missing_category_type = missing_category_type
         clarification.awaiting_category_name = awaiting_category_name
+        if kind is not None:
+            clarification.kind = kind
+        if planned_expense_id is not None:
+            clarification.planned_expense_id = planned_expense_id
         await self.session.flush()
         return clarification
 
@@ -698,6 +716,133 @@ class TransactionRepository:
             raise InvalidTransactionReferenceError("Category is not available to household")
         if category.type != transaction_type:
             raise InvalidTransactionReferenceError("Category type does not match transaction type")
+
+
+class PlannedExpenseRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    @staticmethod
+    def _options():
+        return (
+            selectinload(PlannedExpense.category),
+            selectinload(PlannedExpense.member),
+            selectinload(PlannedExpense.household),
+        )
+
+    async def create(
+        self,
+        *,
+        household_id: int,
+        member_id: int,
+        category_id: int,
+        amount: Decimal,
+        currency: str,
+        description: str,
+        due_date: date,
+        recurrence: str | None,
+        original_text: str,
+        telegram_chat_id: int | None,
+        telegram_message_id: int | None,
+        message_item_index: int = 0,
+        status: PlannedExpenseStatus = PlannedExpenseStatus.PENDING,
+    ) -> PlannedExpense:
+        plan = PlannedExpense(
+            household_id=household_id,
+            member_id=member_id,
+            category_id=category_id,
+            amount=amount,
+            currency=currency.upper(),
+            description=description,
+            due_date=due_date,
+            recurrence=recurrence,
+            original_text=original_text,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+            message_item_index=message_item_index,
+            status=status,
+        )
+        self.session.add(plan)
+        await self.session.flush()
+        plan.category = await self.session.get(Category, category_id)  # type: ignore[assignment]
+        return plan
+
+    async def get_for_household(
+        self, *, household_id: int, planned_expense_id: int, lock: bool = False
+    ) -> PlannedExpense | None:
+        statement = (
+            select(PlannedExpense)
+            .options(*self._options())
+            .where(
+                PlannedExpense.id == planned_expense_id,
+                PlannedExpense.household_id == household_id,
+            )
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def list_active(self, household_id: int) -> list[PlannedExpense]:
+        return list(
+            await self.session.scalars(
+                select(PlannedExpense)
+                .options(*self._options())
+                .where(
+                    PlannedExpense.household_id == household_id,
+                    PlannedExpense.status == PlannedExpenseStatus.SCHEDULED,
+                )
+                .order_by(PlannedExpense.due_date, PlannedExpense.id)
+            )
+        )
+
+    async def list_by_telegram_message(
+        self, telegram_chat_id: int, telegram_message_id: int
+    ) -> list[PlannedExpense]:
+        return list(
+            await self.session.scalars(
+                select(PlannedExpense)
+                .options(*self._options())
+                .where(
+                    PlannedExpense.telegram_chat_id == telegram_chat_id,
+                    PlannedExpense.telegram_message_id == telegram_message_id,
+                )
+                .order_by(PlannedExpense.message_item_index)
+            )
+        )
+
+    async def list_scheduled(self) -> list[PlannedExpense]:
+        return list(
+            await self.session.scalars(
+                select(PlannedExpense)
+                .options(*self._options())
+                .where(PlannedExpense.status == PlannedExpenseStatus.SCHEDULED)
+                .order_by(PlannedExpense.due_date, PlannedExpense.id)
+            )
+        )
+
+    async def claim_delivery(self, planned_expense_id: int, kind: ReminderKind) -> bool:
+        statement = (
+            insert(PlannedExpenseDelivery)
+            .values(planned_expense_id=planned_expense_id, kind=kind)
+            .on_conflict_do_nothing(constraint="uq_planned_expense_delivery_kind")
+            .returning(PlannedExpenseDelivery.id)
+        )
+        return (await self.session.scalar(statement)) is not None
+
+    async def release_delivery(self, planned_expense_id: int, kind: ReminderKind) -> None:
+        await self.session.execute(
+            delete(PlannedExpenseDelivery).where(
+                PlannedExpenseDelivery.planned_expense_id == planned_expense_id,
+                PlannedExpenseDelivery.kind == kind,
+            )
+        )
+
+    async def clear_deliveries(self, planned_expense_id: int) -> None:
+        await self.session.execute(
+            delete(PlannedExpenseDelivery).where(
+                PlannedExpenseDelivery.planned_expense_id == planned_expense_id
+            )
+        )
 
 
 class BudgetRepository:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -67,6 +68,7 @@ def transaction(
         "description": description,
         "beneficiary_member_id": None,
         "date": transaction_date,
+        "recurrence": None,
     }
 
 
@@ -326,6 +328,61 @@ async def test_non_transaction_message_is_ignored() -> None:
     assert result.intent is RecognitionIntent.NOT_A_TRANSACTION
     assert result.transactions == ()
     assert result.needs_clarification is False
+
+
+async def test_recognizes_monthly_planned_expense() -> None:
+    raw = transaction("expense", "100", "taxes_documents", "Страховка", "2026-10-28")
+    raw["recurrence"] = "monthly"
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
+        transactions=[AITransactionCandidate.model_validate(raw)],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+    assert result.transactions == ()
+    assert len(result.planned_expenses) == 1
+    plan = result.planned_expenses[0]
+    assert plan.amount == Decimal("100.00")
+    assert plan.due_date == date(2026, 10, 28)
+    assert plan.recurrence == "monthly"
+
+
+async def test_planned_expense_without_date_requests_date_and_preserves_intent() -> None:
+    raw = transaction("expense", "30", "education", "Школа")
+    raw["date"] = None
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
+        transactions=[AITransactionCandidate.model_validate(raw)],
+        needs_clarification=True,
+        clarification_question="AI question",
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+    assert result.needs_clarification is True
+    assert result.clarification_question == "На яку дату запланувати оплату?"
+    assert result.planned_expenses == ()
+
+
+async def test_planned_expense_rejects_past_date() -> None:
+    raw = transaction("expense", "30", "education", "Школа", "2026-10-06")
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
+        transactions=[AITransactionCandidate.model_validate(raw)],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+    assert result.needs_clarification is True
+    assert "минулому" in (result.clarification_question or "")
 
 
 @pytest.mark.parametrize("missing_field", ["amount", "type"])

@@ -134,6 +134,27 @@ async def test_evening_report_survives_temporary_openai_error() -> None:
     assert "💡 Порада: Персональна порада тимчасово недоступна." in text
 
 
+def test_reports_show_reserved_and_safe_to_spend_amounts() -> None:
+    budget = BudgetStatus(
+        total_limit=None,
+        spent=Decimal("764.00"),
+        income=Decimal("1000.00"),
+        reserved=Decimal("130.00"),
+        days_remaining=10,
+        categories=(),
+    )
+
+    text = service()._evening_text(
+        expense=Decimal("14.00"),
+        budget=budget,
+        currency="EUR",
+        advice="Продовжуйте в тому ж дусі.",
+    )
+
+    assert "📌 Заплановано: €130.00" in text
+    assert "🛡️ Безпечно витратити: €106.00" in text
+
+
 @pytest.mark.asyncio
 async def test_delivery_key_prevents_duplicate_send() -> None:
     automatic = service()

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReportSender(Protocol):
-    async def send_message(self, chat_id: int, text: str) -> object: ...
+    async def send_message(self, chat_id: int, text: str, **kwargs: object) -> object: ...
 
 
 class AutomaticReportService:
@@ -166,6 +166,7 @@ class AutomaticReportService:
             *cls._month_summary_lines(budget, currency),
             "",
             cls._limit_line(budget, currency),
+            *cls._reserve_lines(budget, currency),
             "",
         ]
         approaching = [
@@ -201,6 +202,7 @@ class AutomaticReportService:
                 f"💡 Порада: {advice}",
                 "",
                 cls._limit_line(budget, currency),
+                *cls._reserve_lines(budget, currency),
             ]
         )
 
@@ -226,6 +228,20 @@ class AutomaticReportService:
             f"⚙️ Ліміт витрат: {cls._money(budget.spent, currency)} з "
             f"{cls._money(budget.total_limit, currency)} ({percentage})."
         )
+
+    @classmethod
+    def _reserve_lines(cls, budget: BudgetStatus, currency: str) -> list[str]:
+        if budget.reserved == 0:
+            return []
+        safe = (
+            cls._money(budget.safe_to_spend, currency)
+            if budget.safe_to_spend >= 0
+            else cls._signed_money(budget.safe_to_spend, currency)
+        )
+        return [
+            f"📌 Заплановано: {cls._money(budget.reserved, currency)}",
+            f"🛡️ Безпечно витратити: {safe}",
+        ]
 
     @staticmethod
     def _money(value: Decimal, currency: str) -> str:

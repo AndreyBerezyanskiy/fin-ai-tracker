@@ -17,6 +17,7 @@ from application.services import (
     CategoryService,
     ClarificationService,
     HouseholdSettingsService,
+    PlannedExpenseService,
     ReportService,
     TelegramBootstrapService,
     TransactionRecognitionService,
@@ -72,6 +73,7 @@ def create_dispatcher(
         dispatcher["category_service"] = CategoryService(session_factory)
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
+        dispatcher["planned_expense_service"] = PlannedExpenseService(session_factory)
         dispatcher["clarification_service"] = ClarificationService(session_factory)
         openai_client = AsyncOpenAI(
             api_key=settings.openai_api_key.get_secret_value(),
@@ -115,6 +117,7 @@ async def set_bot_commands(bot: Bot) -> None:
             BotCommand(command="set_budget", description="Встановити місячний бюджет"),
             BotCommand(command="set_category_budget", description="Встановити ліміт категорії"),
             BotCommand(command="last", description="Останні операції"),
+            BotCommand(command="planned", description="Заплановані витрати"),
             BotCommand(command="uncategorized", description="Операції без категорії"),
             BotCommand(command="stats", description="Статистика за категоріями"),
             BotCommand(command="categories", description="Керування категоріями"),
@@ -161,6 +164,9 @@ async def start_bot(settings: Settings | None = None) -> None:
                 report_scheduler = ReportScheduler(
                     sender=bot,
                     report_service=automatic_report_service,
+                    planned_expense_service=dispatcher.workflow_data.get(
+                        "planned_expense_service"
+                    ),
                 )
 
                 async def start_scheduler() -> None:

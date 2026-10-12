@@ -7,8 +7,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from domain.enums import TransactionStatus, TransactionType
-from infrastructure.database import Budget, Transaction, session_scope
+from domain.enums import PlannedExpenseStatus, TransactionStatus, TransactionType
+from infrastructure.database import Budget, PlannedExpense, Transaction, session_scope
 from infrastructure.repositories import BudgetRepository, CategoryRepository, TransactionRepository
 
 
@@ -37,6 +37,7 @@ class BudgetStatus:
     days_remaining: int
     categories: tuple[CategoryBudgetStatus, ...]
     income: Decimal = Decimal("0.00")
+    reserved: Decimal = Decimal("0.00")
 
     @property
     def balance(self) -> Decimal:
@@ -53,6 +54,11 @@ class BudgetStatus:
         if self.total_limit in (None, Decimal("0")):
             return None
         return self.spent * Decimal("100") / self.total_limit
+
+    @property
+    def safe_to_spend(self) -> Decimal:
+        available = self.balance if self.remaining is None else self.remaining
+        return available - self.reserved
 
 
 class BudgetService:
@@ -138,6 +144,14 @@ class BudgetService:
                     Transaction.transaction_date < end_date,
                 )
             )
+            reserved = await session.scalar(
+                select(func.sum(PlannedExpense.amount)).where(
+                    PlannedExpense.household_id == household_id,
+                    PlannedExpense.status == PlannedExpenseStatus.SCHEDULED,
+                    PlannedExpense.currency == currency.upper(),
+                    PlannedExpense.due_date < end_date,
+                )
+            )
             category_totals = await TransactionRepository(session).category_totals(
                 household_id=household_id,
                 start_date=start_date,
@@ -167,6 +181,7 @@ class BudgetService:
             days_remaining=(end_date - today).days - 1,
             categories=category_statuses,
             income=income or Decimal("0.00"),
+            reserved=reserved or Decimal("0.00"),
         )
 
     @staticmethod

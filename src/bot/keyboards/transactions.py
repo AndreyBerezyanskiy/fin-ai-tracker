@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from infrastructure.database import Category, Transaction
+from infrastructure.database import Category, PlannedExpense, Transaction
 
 
 class TransactionActionCallback(CallbackData, prefix="transaction"):
@@ -32,6 +32,11 @@ class UncategorizedCallback(CallbackData, prefix="uncat"):
     category_id: int
 
 
+class PlannedExpenseActionCallback(CallbackData, prefix="plan"):
+    action: str
+    planned_expense_id: int
+
+
 def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -51,6 +56,63 @@ def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def planned_expense_confirmation_keyboard(planned_expense_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="1️⃣ Один раз",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="confirm_once", planned_expense_id=planned_expense_id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🔁 Щомісяця",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="confirm_monthly", planned_expense_id=planned_expense_id
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Скасувати",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="cancel", planned_expense_id=planned_expense_id
+                    ).pack(),
+                ),
+            ],
+        ]
+    )
+
+
+def planned_expenses_keyboard(plans: Iterable[PlannedExpense]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for plan in plans:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✅ Сплачено #{plan.id}",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="paid", planned_expense_id=plan.id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="📅 Перенести",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="postpone", planned_expense_id=plan.id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="❌",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="cancel", planned_expense_id=plan.id
+                    ).pack(),
+                ),
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def clarification_keyboard(
@@ -190,11 +252,14 @@ __all__ = [
     "BudgetActionCallback",
     "CategoryChoiceCallback",
     "TransactionActionCallback",
+    "PlannedExpenseActionCallback",
     "UncategorizedCallback",
     "clarification_keyboard",
     "budget_status_keyboard",
     "category_choice_keyboard",
     "pending_transactions_keyboard",
+    "planned_expense_confirmation_keyboard",
+    "planned_expenses_keyboard",
     "transaction_category_keyboard",
     "uncategorized_transactions_keyboard",
 ]

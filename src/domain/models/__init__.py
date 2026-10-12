@@ -8,6 +8,7 @@ from domain.models.recognition import (
     MemberDefinition,
     RecognitionIntent,
     RecognitionResult,
+    RecognizedPlannedExpense,
     RecognizedTransaction,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "MemberDefinition",
     "RecognitionIntent",
     "RecognitionResult",
+    "RecognizedPlannedExpense",
     "RecognizedTransaction",
 ]

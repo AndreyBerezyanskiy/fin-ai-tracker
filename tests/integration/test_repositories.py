@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -17,11 +17,24 @@ from application.services import (
     CategoryService,
     ClarificationService,
     HouseholdSettingsService,
+    PlannedExpenseService,
     ReportService,
     TransactionService,
 )
-from domain.enums import ReportType, TransactionStatus, TransactionType
-from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
+from domain.enums import (
+    PlannedExpenseRecurrence,
+    PlannedExpenseStatus,
+    ReminderKind,
+    ReportType,
+    TransactionStatus,
+    TransactionType,
+)
+from domain.models import (
+    RecognitionIntent,
+    RecognitionResult,
+    RecognizedPlannedExpense,
+    RecognizedTransaction,
+)
 from infrastructure.database import (
     Category,
     Household,
@@ -268,6 +281,89 @@ async def test_uncategorized_transaction_can_be_reassigned(
 
 
 @pytest.mark.asyncio
+async def test_planned_expense_reserve_reminder_payment_and_recurrence(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    factory = service_session_factory
+    async with session_scope(factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Заплановані витрати"
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=77,
+            display_name="Автор",
+        )
+
+    recognition = RecognitionResult(
+        intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
+        transactions=(),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+        planned_expenses=(
+            RecognizedPlannedExpense(
+                amount=Decimal("100.00"),
+                currency="EUR",
+                category_code="taxes_documents",
+                description="Страховка",
+                due_date=date(2026, 10, 28),
+                recurrence="monthly",
+            ),
+        ),
+    )
+    service = PlannedExpenseService(factory)
+    pending = await service.create_pending(
+        household=household,
+        member=member,
+        telegram_message_id=800,
+        original_text="Щомісяця 28 числа страховка 100",
+        recognition=recognition,
+    )
+    assert len(pending) == 1
+    assert pending[0].status is PlannedExpenseStatus.PENDING
+
+    scheduled = await service.schedule(
+        household_id=household.id,
+        planned_expense_id=pending[0].id,
+        recurrence=PlannedExpenseRecurrence.MONTHLY,
+    )
+    assert scheduled is not None
+    budget = await BudgetService(factory).status(
+        household_id=household.id,
+        currency="EUR",
+        today=date(2026, 10, 27),
+    )
+    assert budget.reserved == Decimal("100.00")
+
+    reminders = await service.due_reminders(datetime(2026, 10, 27, 8, tzinfo=UTC))
+    assert [(item.planned_expense.id, item.kind) for item in reminders] == [
+        (scheduled.id, ReminderKind.DAY_BEFORE)
+    ]
+    assert await service.claim_reminder(scheduled.id, ReminderKind.DAY_BEFORE) is True
+    assert await service.claim_reminder(scheduled.id, ReminderKind.DAY_BEFORE) is False
+
+    paid = await service.mark_paid(
+        household=household,
+        planned_expense_id=scheduled.id,
+        paid_on=date(2026, 10, 28),
+    )
+    assert paid is not None
+    assert paid.status is PlannedExpenseStatus.PAID
+    active = await service.list_active(household.id)
+    assert [(item.amount, item.due_date) for item in active] == [
+        (Decimal("100.00"), date(2026, 11, 28))
+    ]
+    totals = await ReportService(factory).totals(
+        household_id=household.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+    )
+    assert totals.expense == Decimal("100.00")
+
+
+@pytest.mark.asyncio
 async def test_report_delivery_slot_is_claimed_once_and_can_be_retried(
     session: AsyncSession,
 ) -> None:
@@ -440,7 +536,7 @@ async def test_pending_batch_confirm_last_and_undo_flow(
 
     assert len(first) == 2
     assert [item.beneficiary_member_id for item in first] == [beneficiary.id, member.id]
-    assert [item.category.name for item in first] == ["Здоров'я", "Продукти"]
+    assert [item.category.name for item in first] == ["Здоров’я", "Продукти"]
     assert [item.id for item in duplicate] == [item.id for item in first]
     assert all(item.status is TransactionStatus.PENDING for item in first)
 

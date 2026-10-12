@@ -12,6 +12,7 @@ from infrastructure.repositories import (
 )
 
 CLARIFICATION_TTL = timedelta(minutes=10)
+PLANNED_CLARIFICATION_TTL = timedelta(hours=24)
 MAX_CLARIFICATION_ATTEMPTS = 3
 
 
@@ -46,6 +47,8 @@ class ClarificationService:
         ambiguous_member_name: str | None = None,
         suggested_member_id: int | None = None,
         missing_category_type: TransactionType | None = None,
+        kind: str = "transaction",
+        planned_expense_id: int | None = None,
     ) -> TransactionClarification:
         async with self.session_factory() as session, session.begin():
             return await TransactionClarificationRepository(session).upsert(
@@ -54,13 +57,35 @@ class ClarificationService:
                 original_message_id=original_message_id,
                 original_text=original_text,
                 question=question,
-                expires_at=datetime.now(UTC) + CLARIFICATION_TTL,
+                expires_at=datetime.now(UTC)
+                + (PLANNED_CLARIFICATION_TTL if kind.startswith("planned") else CLARIFICATION_TTL),
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
                 missing_category_type=(
                     missing_category_type.value if missing_category_type is not None else None
                 ),
+                kind=kind,
+                planned_expense_id=planned_expense_id,
             )
+
+    async def begin_plan_postpone(
+        self,
+        *,
+        household_id: int,
+        member_id: int,
+        original_message_id: int,
+        planned_expense_id: int,
+        original_text: str,
+    ) -> TransactionClarification:
+        return await self.begin(
+            household_id=household_id,
+            member_id=member_id,
+            original_message_id=original_message_id,
+            original_text=original_text,
+            question="На яку дату перенести оплату?",
+            kind="planned_postpone",
+            planned_expense_id=planned_expense_id,
+        )
 
     async def advance(
         self,
@@ -81,7 +106,12 @@ class ClarificationService:
                 clarification,
                 question=question,
                 attempts=clarification.attempts + 1,
-                expires_at=datetime.now(UTC) + CLARIFICATION_TTL,
+                expires_at=datetime.now(UTC)
+                + (
+                    PLANNED_CLARIFICATION_TTL
+                    if clarification.kind.startswith("planned")
+                    else CLARIFICATION_TTL
+                ),
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
                 missing_category_type=(
@@ -100,7 +130,12 @@ class ClarificationService:
                 clarification,
                 question="Введіть назву нової категорії.",
                 attempts=clarification.attempts,
-                expires_at=datetime.now(UTC) + CLARIFICATION_TTL,
+                expires_at=datetime.now(UTC)
+                + (
+                    PLANNED_CLARIFICATION_TTL
+                    if clarification.kind.startswith("planned")
+                    else CLARIFICATION_TTL
+                ),
                 ambiguous_member_name=None,
                 suggested_member_id=None,
                 missing_category_type=clarification.missing_category_type,
@@ -138,6 +173,7 @@ class ClarificationService:
 __all__ = [
     "CLARIFICATION_TTL",
     "MAX_CLARIFICATION_ATTEMPTS",
+    "PLANNED_CLARIFICATION_TTL",
     "ClarificationService",
     "normalize_alias",
 ]

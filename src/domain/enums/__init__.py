@@ -19,4 +19,28 @@ class ReportType(StrEnum):
     EVENING = "evening"
 
 
-__all__ = ["ReportType", "TransactionStatus", "TransactionType"]
+class PlannedExpenseStatus(StrEnum):
+    PENDING = "pending"
+    SCHEDULED = "scheduled"
+    PAID = "paid"
+    CANCELLED = "cancelled"
+
+
+class PlannedExpenseRecurrence(StrEnum):
+    MONTHLY = "monthly"
+
+
+class ReminderKind(StrEnum):
+    DAY_BEFORE = "day_before"
+    DUE = "due"
+    OVERDUE = "overdue"
+
+
+__all__ = [
+    "PlannedExpenseRecurrence",
+    "PlannedExpenseStatus",
+    "ReminderKind",
+    "ReportType",
+    "TransactionStatus",
+    "TransactionType",
+]

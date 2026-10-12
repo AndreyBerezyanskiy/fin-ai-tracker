@@ -25,7 +25,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from domain.enums import ReportType, TransactionStatus, TransactionType
+from domain.enums import (
+    PlannedExpenseRecurrence,
+    PlannedExpenseStatus,
+    ReminderKind,
+    ReportType,
+    TransactionStatus,
+    TransactionType,
+)
 from infrastructure.database.base import Base, TimestampMixin
 
 transaction_type_enum = Enum(
@@ -66,6 +73,7 @@ class Household(TimestampMixin, Base):
     categories: Mapped[list[Category]] = relationship(back_populates="household")
     transactions: Mapped[list[Transaction]] = relationship(back_populates="household")
     budgets: Mapped[list[Budget]] = relationship(back_populates="household")
+    planned_expenses: Mapped[list[PlannedExpense]] = relationship(back_populates="household")
 
 
 class ReportDelivery(TimestampMixin, Base):
@@ -161,6 +169,12 @@ class TransactionClarification(TimestampMixin, Base):
     missing_category_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     awaiting_category_name: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="transaction", server_default="transaction"
+    )
+    planned_expense_id: Mapped[int | None] = mapped_column(
+        ForeignKey("planned_expenses.id", ondelete="SET NULL"), nullable=True
     )
 
 
@@ -262,6 +276,91 @@ class Transaction(TimestampMixin, Base):
     category: Mapped[Category | None] = relationship(back_populates="transactions")
 
 
+class PlannedExpense(TimestampMixin, Base):
+    __tablename__ = "planned_expenses"
+    __table_args__ = (
+        UniqueConstraint(
+            "telegram_chat_id",
+            "telegram_message_id",
+            "message_item_index",
+            name="uq_planned_expenses_telegram_message_item",
+        ),
+        CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint("message_item_index >= 0", name="message_item_index_valid"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    member_id: Mapped[int] = mapped_column(
+        ForeignKey("members.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("categories.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[PlannedExpenseStatus] = mapped_column(
+        Enum(
+            PlannedExpenseStatus,
+            name="planned_expense_status",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+        default=PlannedExpenseStatus.PENDING,
+        server_default=PlannedExpenseStatus.PENDING.value,
+        index=True,
+    )
+    recurrence: Mapped[PlannedExpenseRecurrence | None] = mapped_column(
+        Enum(
+            PlannedExpenseRecurrence,
+            name="planned_expense_recurrence",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=True,
+    )
+    transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    original_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    message_item_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    household: Mapped[Household] = relationship(back_populates="planned_expenses")
+    member: Mapped[Member] = relationship()
+    category: Mapped[Category] = relationship()
+    transaction: Mapped[Transaction | None] = relationship()
+    deliveries: Mapped[list[PlannedExpenseDelivery]] = relationship(
+        back_populates="planned_expense", cascade="all, delete-orphan"
+    )
+
+
+class PlannedExpenseDelivery(TimestampMixin, Base):
+    __tablename__ = "planned_expense_deliveries"
+    __table_args__ = (
+        UniqueConstraint("planned_expense_id", "kind", name="uq_planned_expense_delivery_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    planned_expense_id: Mapped[int] = mapped_column(
+        ForeignKey("planned_expenses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[ReminderKind] = mapped_column(
+        Enum(
+            ReminderKind,
+            name="planned_expense_reminder_kind",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        nullable=False,
+    )
+
+    planned_expense: Mapped[PlannedExpense] = relationship(back_populates="deliveries")
+
+
 class Budget(TimestampMixin, Base):
     __tablename__ = "budgets"
     __table_args__ = (
@@ -308,6 +407,8 @@ __all__ = [
     "Household",
     "Member",
     "MemberAlias",
+    "PlannedExpense",
+    "PlannedExpenseDelivery",
     "ProcessedTelegramUpdate",
     "ReportDelivery",
     "Transaction",

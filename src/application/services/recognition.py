@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.models import CategoryDefinition, MemberDefinition, RecognitionResult
 from infrastructure.database import Household, Member
-from infrastructure.openai import OpenAITransactionRecognizer
 from infrastructure.repositories import CategoryRepository, MemberAliasRepository, MemberRepository
+
+if TYPE_CHECKING:
+    from infrastructure.openai import OpenAITransactionRecognizer
 
 
 class TransactionRecognitionService:

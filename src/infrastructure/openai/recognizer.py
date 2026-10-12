@@ -18,6 +18,7 @@ from domain.models import (
     MemberDefinition,
     RecognitionIntent,
     RecognitionResult,
+    RecognizedPlannedExpense,
     RecognizedTransaction,
 )
 
@@ -27,11 +28,18 @@ INVALID_DATE_QUESTION = "Не вдалося визначити дату. Уто
 GENERIC_CLARIFICATION_QUESTION = "Уточніть, будь ласка, суму та тип операції."
 MAX_TRANSACTION_AMOUNT = Decimal("9999999999999999.99")
 
-SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові операції з коротких повідомлень.
+SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові операції та заплановані витрати
+з коротких повідомлень.
 Поверни лише дані за наданою схемою. Не роби фінансових розрахунків і не виконуй дій.
 
 Правила:
 - Одне повідомлення може містити кілька операцій; поверни кожну окремо.
+- Для вже здійснених операцій intent=create_transactions.
+- Якщо користувач говорить про майбутню обов'язкову витрату (наприклад «заплануй»,
+  «відклади», «треба буде заплатити»), поверни intent=create_planned_expenses.
+- Для запланованої витрати type завжди expense. Вона обов'язково повинна мати майбутню
+  або сьогоднішню дату. Якщо дати немає, date=null, needs_clarification=true і запитай дату.
+- Для щомісячного плану recurrence=monthly, інакше recurrence=null.
 - type може бути лише expense або income.
 - amount поверни десятковим рядком із крапкою, без назви валюти.
 - Якщо валюта не вказана, використай основну валюту.
@@ -130,10 +138,18 @@ class OpenAITransactionRecognizer:
                 suggested_member_id=None,
             )
 
+        is_planned = parsed.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
         category_by_code = {item.code: item for item in categories}
         allowed_member_ids = {item.id for item in members}
         validated: list[RecognizedTransaction] = []
+        planned: list[RecognizedPlannedExpense] = []
         for candidate in parsed.transactions:
+            if is_planned and candidate.transaction_date is None:
+                return self._clarification(
+                    "На яку дату запланувати оплату?",
+                    metadata,
+                    intent=parsed.intent,
+                )
             transaction_or_question = self._validate_candidate(
                 candidate,
                 local_date=local_date,
@@ -147,12 +163,43 @@ class OpenAITransactionRecognizer:
                     transaction_or_question.question,
                     metadata,
                     missing_category_type=transaction_or_question.transaction_type,
+                    intent=parsed.intent,
                 )
             if isinstance(transaction_or_question, str):
-                return self._clarification(transaction_or_question, metadata)
-            validated.append(transaction_or_question)
+                return self._clarification(transaction_or_question, metadata, intent=parsed.intent)
+            if is_planned:
+                if transaction_or_question.type is not TransactionType.EXPENSE:
+                    return self._clarification(
+                        "Запланувати можна лише витрату. Уточніть платіж, будь ласка.",
+                        metadata,
+                        intent=parsed.intent,
+                    )
+                if transaction_or_question.transaction_date < local_date:
+                    return self._clarification(
+                        "Дата запланованої оплати не може бути в минулому. Уточніть дату.",
+                        metadata,
+                        intent=parsed.intent,
+                    )
+                if candidate.recurrence not in (None, "monthly"):
+                    return self._clarification(
+                        "Поки підтримуються лише щомісячні повторення.",
+                        metadata,
+                        intent=parsed.intent,
+                    )
+                planned.append(
+                    RecognizedPlannedExpense(
+                        amount=transaction_or_question.amount,
+                        currency=transaction_or_question.currency,
+                        category_code=transaction_or_question.category_code,
+                        description=transaction_or_question.description,
+                        due_date=transaction_or_question.transaction_date,
+                        recurrence=candidate.recurrence,
+                    )
+                )
+            else:
+                validated.append(transaction_or_question)
 
-        if not validated:
+        if not validated and not planned:
             question = self._safe_question(parsed.clarification_question)
             suggested_member_id = (
                 parsed.suggested_member_id
@@ -169,6 +216,7 @@ class OpenAITransactionRecognizer:
                 metadata,
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
+                intent=parsed.intent,
             )
         if parsed.needs_clarification:
             question = self._safe_question(parsed.clarification_question)
@@ -187,15 +235,17 @@ class OpenAITransactionRecognizer:
                 metadata,
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
+                intent=parsed.intent,
             )
         return RecognitionResult(
-            intent=RecognitionIntent.CREATE_TRANSACTIONS,
+            intent=parsed.intent,
             transactions=tuple(validated),
             needs_clarification=False,
             clarification_question=None,
             ai_metadata=metadata,
             ambiguous_member_name=None,
             suggested_member_id=None,
+            planned_expenses=tuple(planned),
         )
 
     def _validate_candidate(
@@ -276,9 +326,10 @@ class OpenAITransactionRecognizer:
         ambiguous_member_name: str | None = None,
         suggested_member_id: int | None = None,
         missing_category_type: TransactionType | None = None,
+        intent: RecognitionIntent = RecognitionIntent.CREATE_TRANSACTIONS,
     ) -> RecognitionResult:
         return RecognitionResult(
-            intent=RecognitionIntent.CREATE_TRANSACTIONS,
+            intent=intent,
             transactions=(),
             needs_clarification=True,
             clarification_question=question,

@@ -13,6 +13,7 @@ from domain.enums import TransactionType
 
 class RecognitionIntent(StrEnum):
     CREATE_TRANSACTIONS = "create_transactions"
+    CREATE_PLANNED_EXPENSES = "create_planned_expenses"
     NOT_A_TRANSACTION = "not_a_transaction"
 
 
@@ -28,6 +29,7 @@ class AITransactionCandidate(BaseModel):
     description: str | None
     beneficiary_member_id: int | None
     transaction_date: str | None = Field(alias="date")
+    recurrence: str | None
 
 
 class AIRecognitionResponse(BaseModel):
@@ -61,6 +63,17 @@ class RecognizedTransaction(BaseModel):
         return f"{amount:.2f}"
 
 
+class RecognizedPlannedExpense(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    currency: str = Field(min_length=3, max_length=3)
+    category_code: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
+    due_date: date
+    recurrence: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class CategoryDefinition:
     code: str
@@ -86,6 +99,7 @@ class RecognitionResult:
     ambiguous_member_name: str | None = None
     suggested_member_id: int | None = None
     missing_category_type: TransactionType | None = None
+    planned_expenses: tuple[RecognizedPlannedExpense, ...] = ()
 
 
 __all__ = [
@@ -95,5 +109,6 @@ __all__ = [
     "MemberDefinition",
     "RecognitionIntent",
     "RecognitionResult",
+    "RecognizedPlannedExpense",
     "RecognizedTransaction",
 ]
