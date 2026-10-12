@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
@@ -43,7 +43,12 @@ from bot.middlewares import (
     UpdateLoggingMiddleware,
 )
 from domain.enums import ReportType, TransactionStatus, TransactionType
-from domain.models import RecognitionIntent, RecognitionResult, RecognizedTransaction
+from domain.models import (
+    RecognitionIntent,
+    RecognitionResult,
+    RecognizedStatisticsQuery,
+    RecognizedTransaction,
+)
 from infrastructure.database import Household, Member, TransactionClarification
 
 
@@ -507,6 +512,113 @@ async def test_plain_message_returns_recognized_transactions_in_ukrainian() -> N
 
 
 @pytest.mark.asyncio
+async def test_plain_message_returns_filtered_statistics_for_requested_period() -> None:
+    processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=10,
+        text="Дай статистику доходів за останні 2 місяці",
+        answer=AsyncMock(),
+        reply=AsyncMock(return_value=processing_message),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.GET_STATISTICS,
+        transactions=(),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+        statistics_query=RecognizedStatisticsQuery(
+            transaction_type=TransactionType.INCOME,
+            start_date=date(2026, 8, 12),
+            end_date=date(2026, 10, 12),
+        ),
+    )
+    category_service = SimpleNamespace(
+        statistics=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    name="Зарплата",
+                    type=TransactionType.INCOME,
+                    amount=Decimal("2200.00"),
+                ),
+                SimpleNamespace(
+                    name="Продукти",
+                    type=TransactionType.EXPENSE,
+                    amount=Decimal("400.00"),
+                ),
+            )
+        )
+    )
+    transaction_service = SimpleNamespace(create_pending=AsyncMock())
+
+    await recognize_plain_message(
+        message,
+        household,
+        Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена"),
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        transaction_service,
+        category_service=category_service,
+    )
+
+    category_service.statistics.assert_awaited_once_with(
+        household_id=1,
+        start_date=date(2026, 8, 12),
+        end_date=date(2026, 10, 13),
+    )
+    answer = message.answer.await_args.args[0]
+    assert "Статистика доходів" in answer
+    assert "12.08.2026 — 12.10.2026" in answer
+    assert "Зарплата: €2200.00" in answer
+    assert "Продукти" not in answer
+    transaction_service.create_pending.assert_not_awaited()
+    processing_message.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_plain_message_statistics_reports_empty_period() -> None:
+    processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=10,
+        text="Статистика витрат за останні 40 днів",
+        answer=AsyncMock(),
+        reply=AsyncMock(return_value=processing_message),
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.GET_STATISTICS,
+        transactions=(),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+        statistics_query=RecognizedStatisticsQuery(
+            transaction_type=TransactionType.EXPENSE,
+            start_date=date(2026, 9, 3),
+            end_date=date(2026, 10, 12),
+        ),
+    )
+    category_service = SimpleNamespace(statistics=AsyncMock(return_value=()))
+
+    await recognize_plain_message(
+        message,
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR"),
+        Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена"),
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        SimpleNamespace(create_pending=AsyncMock()),
+        category_service=category_service,
+    )
+
+    answer = message.answer.await_args.args[0]
+    assert "Статистика витрат" in answer
+    assert "03.09.2026 — 12.10.2026" in answer
+    assert "Підтверджених операцій за цей період немає" in answer
+
+
+@pytest.mark.asyncio
 async def test_plain_message_asks_clarification() -> None:
     processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
     message = SimpleNamespace(
@@ -726,6 +838,85 @@ async def test_followup_answer_resumes_original_message_and_remembers_alias() ->
         household_id=1, member_id=3, alias="Яна"
     )
     clarification_service.cancel.assert_awaited_once_with(7)
+    indicator.delete.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_statistics_period_clarification_keeps_original_context() -> None:
+    indicator = SimpleNamespace(message_id=12, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=11,
+        text="за останні 40 днів",
+        answer=AsyncMock(side_effect=[indicator, None]),
+        reply=AsyncMock(),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена")
+    clarification = TransactionClarification(
+        id=7,
+        household_id=1,
+        member_id=2,
+        original_message_id=10,
+        original_text="Покажи статистику витрат",
+        question="За який період показати статистику?",
+        attempts=0,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.GET_STATISTICS,
+        transactions=(),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+        statistics_query=RecognizedStatisticsQuery(
+            transaction_type=TransactionType.EXPENSE,
+            start_date=date(2026, 9, 3),
+            end_date=date(2026, 10, 12),
+        ),
+    )
+    recognition_service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+    clarification_service = SimpleNamespace(
+        get=AsyncMock(return_value=clarification),
+        cancel=AsyncMock(return_value=True),
+    )
+    category_service = SimpleNamespace(
+        statistics=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    name="Продукти",
+                    type=TransactionType.EXPENSE,
+                    amount=Decimal("85.40"),
+                ),
+            )
+        )
+    )
+    transaction_service = SimpleNamespace(create_pending=AsyncMock())
+
+    await recognize_plain_message(
+        message,
+        household,
+        member,
+        recognition_service,
+        transaction_service,
+        clarification_service=clarification_service,
+        category_service=category_service,
+    )
+
+    recognition_service.recognize.assert_awaited_once_with(
+        message="Покажи статистику витрат",
+        household=household,
+        member=member,
+        clarification_question="За який період показати статистику?",
+        clarification_answer="за останні 40 днів",
+    )
+    clarification_service.cancel.assert_awaited_once_with(7)
+    category_service.statistics.assert_awaited_once_with(
+        household_id=1,
+        start_date=date(2026, 9, 3),
+        end_date=date(2026, 10, 13),
+    )
+    assert "Продукти: €85.40" in message.answer.await_args_list[-1].args[0]
+    transaction_service.create_pending.assert_not_awaited()
     indicator.delete.assert_awaited_once()
 
 

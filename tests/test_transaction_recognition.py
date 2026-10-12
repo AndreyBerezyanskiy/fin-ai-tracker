@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from domain.enums import TransactionType
 from domain.models import (
     AIRecognitionResponse,
+    AIStatisticsQuery,
     AITransactionCandidate,
     CategoryDefinition,
     MemberDefinition,
@@ -328,6 +329,82 @@ async def test_non_transaction_message_is_ignored() -> None:
     assert result.intent is RecognitionIntent.NOT_A_TRANSACTION
     assert result.transactions == ()
     assert result.needs_clarification is False
+
+
+@pytest.mark.parametrize(
+    ("transaction_type", "start_date", "end_date"),
+    [
+        (TransactionType.INCOME, "2026-08-07", "2026-10-07"),
+        (TransactionType.EXPENSE, "2026-08-29", "2026-10-07"),
+        (None, "2026-10-01", "2026-10-07"),
+    ],
+)
+async def test_recognizes_statistics_query(
+    transaction_type: TransactionType | None,
+    start_date: str,
+    end_date: str,
+) -> None:
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.GET_STATISTICS,
+        transactions=[],
+        needs_clarification=False,
+        clarification_question=None,
+        statistics_query=AIStatisticsQuery(
+            transaction_type=transaction_type,
+            start_date=start_date,
+            end_date=end_date,
+        ),
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.GET_STATISTICS
+    assert result.transactions == ()
+    assert result.statistics_query is not None
+    assert result.statistics_query.transaction_type is transaction_type
+    assert result.statistics_query.start_date == date.fromisoformat(start_date)
+    assert result.statistics_query.end_date == date.fromisoformat(end_date)
+
+
+@pytest.mark.parametrize(
+    ("query", "question_fragment"),
+    [
+        (None, "період"),
+        (
+            AIStatisticsQuery(
+                transaction_type=TransactionType.EXPENSE,
+                start_date="2026-10-08",
+                end_date="2026-10-07",
+            ),
+            "Початок",
+        ),
+        (
+            AIStatisticsQuery(
+                transaction_type=TransactionType.EXPENSE,
+                start_date="2026-10-01",
+                end_date="2026-10-08",
+            ),
+            "до сьогодні",
+        ),
+    ],
+)
+async def test_invalid_statistics_period_requests_clarification(
+    query: AIStatisticsQuery | None, question_fragment: str
+) -> None:
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.GET_STATISTICS,
+        transactions=[],
+        needs_clarification=query is None,
+        clarification_question=None,
+        statistics_query=query,
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.GET_STATISTICS
+    assert result.needs_clarification is True
+    assert question_fragment in (result.clarification_question or "")
+    assert result.statistics_query is None
 
 
 async def test_recognizes_monthly_planned_expense() -> None:

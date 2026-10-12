@@ -19,6 +19,7 @@ from domain.models import (
     RecognitionIntent,
     RecognitionResult,
     RecognizedPlannedExpense,
+    RecognizedStatisticsQuery,
     RecognizedTransaction,
 )
 
@@ -40,6 +41,15 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Для запланованої витрати type завжди expense. Вона обов'язково повинна мати майбутню
   або сьогоднішню дату. Якщо дати немає, date=null, needs_clarification=true і запитай дату.
 - Для щомісячного плану recurrence=monthly, інакше recurrence=null.
+- Якщо користувач просить показати, порахувати або дати статистику доходів чи витрат,
+  поверни intent=get_statistics, transactions=[] і заповни statistics_query.
+- У statistics_query transaction_type=income для доходів, expense для витрат або null,
+  якщо потрібні обидва типи. start_date та end_date — включні календарні межі YYYY-MM-DD.
+- Відносні періоди обчислюй від current_local_date. «Останні N днів» включає сьогодні:
+  start_date = current_local_date мінус N-1 днів. Для «останні N місяців» відніми N
+  календарних місяців від current_local_date; end_date=current_local_date.
+- Якщо період статистики не вказаний, використовуй від першого дня поточного місяця
+  до current_local_date. Для інших intent statistics_query=null.
 - type може бути лише expense або income.
 - amount поверни десятковим рядком із крапкою, без назви валюти.
 - Якщо валюта не вказана, використай основну валюту.
@@ -127,6 +137,47 @@ class OpenAITransactionRecognizer:
         parsed = response.output_parsed
         if parsed is None:
             return self._clarification(GENERIC_CLARIFICATION_QUESTION, metadata)
+        if parsed.intent is RecognitionIntent.GET_STATISTICS:
+            query = parsed.statistics_query
+            if query is None or query.start_date is None or query.end_date is None:
+                return self._clarification(
+                    "За який період показати статистику?",
+                    metadata,
+                    intent=parsed.intent,
+                )
+            try:
+                start_date = date.fromisoformat(query.start_date)
+                end_date = date.fromisoformat(query.end_date)
+            except ValueError:
+                return self._clarification(
+                    "Не вдалося визначити період. Уточніть дати, будь ласка.",
+                    metadata,
+                    intent=parsed.intent,
+                )
+            if start_date > end_date:
+                return self._clarification(
+                    "Початок періоду не може бути пізніше завершення. Уточніть дати.",
+                    metadata,
+                    intent=parsed.intent,
+                )
+            if end_date > local_date:
+                return self._clarification(
+                    "Статистику можна показати лише до сьогодні. Уточніть період.",
+                    metadata,
+                    intent=parsed.intent,
+                )
+            return RecognitionResult(
+                intent=parsed.intent,
+                transactions=(),
+                needs_clarification=False,
+                clarification_question=None,
+                ai_metadata=metadata,
+                statistics_query=RecognizedStatisticsQuery(
+                    transaction_type=query.transaction_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+            )
         if parsed.intent is RecognitionIntent.NOT_A_TRANSACTION:
             return RecognitionResult(
                 intent=RecognitionIntent.NOT_A_TRANSACTION,

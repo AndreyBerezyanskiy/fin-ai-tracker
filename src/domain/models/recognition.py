@@ -14,6 +14,7 @@ from domain.enums import TransactionType
 class RecognitionIntent(StrEnum):
     CREATE_TRANSACTIONS = "create_transactions"
     CREATE_PLANNED_EXPENSES = "create_planned_expenses"
+    GET_STATISTICS = "get_statistics"
     NOT_A_TRANSACTION = "not_a_transaction"
 
 
@@ -32,6 +33,16 @@ class AITransactionCandidate(BaseModel):
     recurrence: str | None
 
 
+class AIStatisticsQuery(BaseModel):
+    """Date range and optional transaction type returned by OpenAI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_type: TransactionType | None
+    start_date: str | None
+    end_date: str | None
+
+
 class AIRecognitionResponse(BaseModel):
     """Strict Structured Outputs schema used at the API boundary."""
 
@@ -43,6 +54,7 @@ class AIRecognitionResponse(BaseModel):
     clarification_question: str | None
     ambiguous_member_name: str | None = None
     suggested_member_id: int | None = None
+    statistics_query: AIStatisticsQuery | None = None
 
 
 class RecognizedTransaction(BaseModel):
@@ -74,6 +86,14 @@ class RecognizedPlannedExpense(BaseModel):
     recurrence: str | None = None
 
 
+class RecognizedStatisticsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_type: TransactionType | None = None
+    start_date: date
+    end_date: date
+
+
 @dataclass(frozen=True, slots=True)
 class CategoryDefinition:
     code: str
@@ -100,15 +120,18 @@ class RecognitionResult:
     suggested_member_id: int | None = None
     missing_category_type: TransactionType | None = None
     planned_expenses: tuple[RecognizedPlannedExpense, ...] = ()
+    statistics_query: RecognizedStatisticsQuery | None = None
 
 
 __all__ = [
     "AIRecognitionResponse",
+    "AIStatisticsQuery",
     "AITransactionCandidate",
     "CategoryDefinition",
     "MemberDefinition",
     "RecognitionIntent",
     "RecognitionResult",
     "RecognizedPlannedExpense",
+    "RecognizedStatisticsQuery",
     "RecognizedTransaction",
 ]

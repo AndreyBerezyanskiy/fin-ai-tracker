@@ -53,14 +53,14 @@ from domain.enums import (
     TransactionStatus,
     TransactionType,
 )
-from domain.models import RecognitionIntent
+from domain.models import RecognitionIntent, RecognizedStatisticsQuery
 from infrastructure.database import Household, Member, TransactionClarification
 from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
 
 AI_UNAVAILABLE_MESSAGE = (
-    "Не вдалося розпізнати операцію. Спробуйте ще раз або напишіть у форматі: 34 продукти Lidl."
+    "Не вдалося обробити повідомлення. Спробуйте ще раз або скористайтеся /help."
 )
 
 HELP_TEXT = """Доступні команди:
@@ -91,6 +91,7 @@ HELP_TEXT = """Доступні команди:
 
 Надсилайте витрати й доходи звичайним текстом, наприклад: «кава 4,50».
 Плани теж можна додавати текстом: «Заплануй страховку 100 євро на 28 жовтня».
+Статистику можна запитати так: «Покажи витрати за останні 40 днів».
 Щоб бот надалі бачив такі повідомлення, вимкніть Privacy Mode через @BotFather."""
 
 
@@ -109,6 +110,53 @@ def _format_totals(title: str, totals: PeriodTotals, currency: str) -> str:
         lines.append(f"Витрати: {amount(totals.expense)}")
     lines.append(f"Баланс: {amount(totals.balance)}")
     return "\n".join(lines)
+
+
+async def _answer_statistics_query(
+    message: Message,
+    *,
+    household: Household,
+    category_service: CategoryService,
+    query: RecognizedStatisticsQuery,
+) -> None:
+    statistics = await category_service.statistics(
+        household_id=household.id,
+        start_date=query.start_date,
+        end_date=query.end_date + timedelta(days=1),
+    )
+    items = tuple(
+        item
+        for item in statistics
+        if query.transaction_type is None or item.type is query.transaction_type
+    )
+    subject = {
+        TransactionType.INCOME: "доходів",
+        TransactionType.EXPENSE: "витрат",
+        None: "доходів і витрат",
+    }[query.transaction_type]
+    lines = [
+        f"📊 Статистика {subject}",
+        f"📅 {query.start_date:%d.%m.%Y} — {query.end_date:%d.%m.%Y}",
+    ]
+    if not items:
+        lines.extend(["", "Підтверджених операцій за цей період немає."])
+        await message.answer("\n".join(lines))
+        return
+    for transaction_type, section in (
+        (TransactionType.EXPENSE, "Витрати"),
+        (TransactionType.INCOME, "Доходи"),
+    ):
+        section_items = tuple(item for item in items if item.type is transaction_type)
+        if not section_items:
+            continue
+        lines.extend(["", f"{section}:"])
+        lines.extend(
+            f"• {item.name}: {_currency_prefix(household.currency)}{item.amount:.2f}"
+            for item in section_items
+        )
+        total = sum((item.amount for item in section_items), Decimal("0.00"))
+        lines.append(f"Разом: {_currency_prefix(household.currency)}{total:.2f}")
+    await message.answer("\n".join(lines))
 
 
 def _today(household: Household) -> date:
@@ -860,6 +908,17 @@ async def recognize_plain_message(
                 category_service=category_service,
             )
             return
+        if result.intent is RecognitionIntent.GET_STATISTICS:
+            if category_service is None or result.statistics_query is None:
+                await message.answer("Сервіс статистики недоступний.")
+                return
+            await _answer_statistics_query(
+                message,
+                household=household,
+                category_service=category_service,
+                query=result.statistics_query,
+            )
+            return
         if result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES:
             if planned_expense_service is None:
                 await message.answer("Сервіс запланованих витрат недоступний.")
@@ -955,6 +1014,19 @@ async def _resolve_clarification(
                     household=household,
                     category_service=category_service,
                 )
+            return
+
+        if result.intent is RecognitionIntent.GET_STATISTICS:
+            if category_service is None or result.statistics_query is None:
+                await message.answer("Сервіс статистики недоступний.")
+                return
+            await clarification_service.cancel(clarification.id)
+            await _answer_statistics_query(
+                message,
+                household=household,
+                category_service=category_service,
+                query=result.statistics_query,
+            )
             return
 
         if result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES:
