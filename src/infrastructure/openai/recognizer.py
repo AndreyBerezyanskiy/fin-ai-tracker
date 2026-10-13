@@ -38,6 +38,8 @@ SYSTEM_PROMPT = """Ти розпізнаєш сімейні фінансові �
 - Для вже здійснених операцій intent=create_transactions.
 - Якщо користувач говорить про майбутню обов'язкову витрату (наприклад «заплануй»,
   «відклади», «треба буде заплатити»), поверни intent=create_planned_expenses.
+- Будь-яку витрату з датою пізніше current_local_date вважай запланованою, навіть якщо
+  користувач написав «додай витрату» замість «заплануй».
 - Для запланованої витрати type завжди expense. Вона обов'язково повинна мати майбутню
   або сьогоднішню дату. Якщо дати немає, date=null, needs_clarification=true і запитай дату.
 - Для щомісячного плану recurrence=monthly, інакше recurrence=null.
@@ -189,7 +191,36 @@ class OpenAITransactionRecognizer:
                 suggested_member_id=None,
             )
 
-        is_planned = parsed.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+        def is_future_expense(candidate: AITransactionCandidate) -> bool:
+            if candidate.type is not TransactionType.EXPENSE or not candidate.transaction_date:
+                return False
+            try:
+                return date.fromisoformat(candidate.transaction_date) > local_date
+            except ValueError:
+                return False
+
+        future_flags = tuple(is_future_expense(candidate) for candidate in parsed.transactions)
+        if (
+            parsed.intent is RecognitionIntent.CREATE_TRANSACTIONS
+            and any(future_flags)
+            and not all(future_flags)
+        ):
+            return self._clarification(
+                "Надішліть здійснені та майбутні витрати окремими повідомленнями.",
+                metadata,
+            )
+        future_expense_batch = (
+            parsed.intent is RecognitionIntent.CREATE_TRANSACTIONS
+            and bool(future_flags)
+            and all(future_flags)
+        )
+        is_planned = (
+            parsed.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+            or future_expense_batch
+        )
+        result_intent = (
+            RecognitionIntent.CREATE_PLANNED_EXPENSES if is_planned else parsed.intent
+        )
         category_by_code = {item.code: item for item in categories}
         allowed_member_ids = {item.id for item in members}
         validated: list[RecognizedTransaction] = []
@@ -199,7 +230,7 @@ class OpenAITransactionRecognizer:
                 return self._clarification(
                     "На яку дату запланувати оплату?",
                     metadata,
-                    intent=parsed.intent,
+                    intent=result_intent,
                 )
             transaction_or_question = self._validate_candidate(
                 candidate,
@@ -214,28 +245,32 @@ class OpenAITransactionRecognizer:
                     transaction_or_question.question,
                     metadata,
                     missing_category_type=transaction_or_question.transaction_type,
-                    intent=parsed.intent,
+                    intent=result_intent,
                 )
             if isinstance(transaction_or_question, str):
-                return self._clarification(transaction_or_question, metadata, intent=parsed.intent)
+                question = transaction_or_question
+                if is_planned and question == MISSING_AMOUNT_OR_TYPE_QUESTION:
+                    description = (candidate.description or "оплати").strip()[:100]
+                    question = f"Яку суму запланувати для «{description}»?"
+                return self._clarification(question, metadata, intent=result_intent)
             if is_planned:
                 if transaction_or_question.type is not TransactionType.EXPENSE:
                     return self._clarification(
                         "Запланувати можна лише витрату. Уточніть платіж, будь ласка.",
                         metadata,
-                        intent=parsed.intent,
+                        intent=result_intent,
                     )
                 if transaction_or_question.transaction_date < local_date:
                     return self._clarification(
                         "Дата запланованої оплати не може бути в минулому. Уточніть дату.",
                         metadata,
-                        intent=parsed.intent,
+                        intent=result_intent,
                     )
                 if candidate.recurrence not in (None, "monthly"):
                     return self._clarification(
                         "Поки підтримуються лише щомісячні повторення.",
                         metadata,
-                        intent=parsed.intent,
+                        intent=result_intent,
                     )
                 planned.append(
                     RecognizedPlannedExpense(
@@ -267,7 +302,7 @@ class OpenAITransactionRecognizer:
                 metadata,
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
-                intent=parsed.intent,
+                intent=result_intent,
             )
         if parsed.needs_clarification:
             question = self._safe_question(parsed.clarification_question)
@@ -286,10 +321,10 @@ class OpenAITransactionRecognizer:
                 metadata,
                 ambiguous_member_name=ambiguous_member_name,
                 suggested_member_id=suggested_member_id,
-                intent=parsed.intent,
+                intent=result_intent,
             )
         return RecognitionResult(
-            intent=parsed.intent,
+            intent=result_intent,
             transactions=tuple(validated),
             needs_clarification=False,
             clarification_question=None,

@@ -77,7 +77,13 @@ def planned_expense_confirmation_keyboard(planned_expense_id: int) -> InlineKeyb
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Скасувати",
+                    text="✏️ Змінити",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="edit", planned_expense_id=planned_expense_id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Видалити план",
                     callback_data=PlannedExpenseActionCallback(
                         action="cancel", planned_expense_id=planned_expense_id
                     ).pack(),
@@ -90,29 +96,72 @@ def planned_expense_confirmation_keyboard(planned_expense_id: int) -> InlineKeyb
 def planned_expenses_keyboard(plans: Iterable[PlannedExpense]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for plan in plans:
-        rows.append(
+        rows.extend(
             [
-                InlineKeyboardButton(
-                    text=f"✅ Сплачено #{plan.id}",
-                    callback_data=PlannedExpenseActionCallback(
-                        action="paid", planned_expense_id=plan.id
-                    ).pack(),
-                ),
-                InlineKeyboardButton(
-                    text="📅 Перенести",
-                    callback_data=PlannedExpenseActionCallback(
-                        action="postpone", planned_expense_id=plan.id
-                    ).pack(),
-                ),
-                InlineKeyboardButton(
-                    text="❌",
-                    callback_data=PlannedExpenseActionCallback(
-                        action="cancel", planned_expense_id=plan.id
-                    ).pack(),
-                ),
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ Сплачено #{plan.id}",
+                        callback_data=PlannedExpenseActionCallback(
+                            action="paid", planned_expense_id=plan.id
+                        ).pack(),
+                    ),
+                    InlineKeyboardButton(
+                        text="📅 Перенести",
+                        callback_data=PlannedExpenseActionCallback(
+                            action="postpone", planned_expense_id=plan.id
+                        ).pack(),
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="✏️ Змінити",
+                        callback_data=PlannedExpenseActionCallback(
+                            action="edit", planned_expense_id=plan.id
+                        ).pack(),
+                    ),
+                    InlineKeyboardButton(
+                        text="🗑 Видалити",
+                        callback_data=PlannedExpenseActionCallback(
+                            action="cancel", planned_expense_id=plan.id
+                        ).pack(),
+                    ),
+                ],
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def planned_expense_edit_keyboard(planned_expense_id: int) -> InlineKeyboardMarkup:
+    def button(text: str, action: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            text=text,
+            callback_data=PlannedExpenseActionCallback(
+                action=action, planned_expense_id=planned_expense_id
+            ).pack(),
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [button("🏷 Категорію", "edit_category"), button("💶 Суму", "edit_amount")],
+            [button("📅 Дату", "edit_date"), button("📝 Опис", "edit_description")],
+            [button("⬅️ Назад", "edit_back"), button("🗑 Видалити", "cancel")],
+        ]
+    )
+
+
+def planned_expense_edit_cancel_keyboard(planned_expense_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Скасувати редагування",
+                    callback_data=PlannedExpenseActionCallback(
+                        action="edit_cancel", planned_expense_id=planned_expense_id
+                    ).pack(),
+                )
+            ]
+        ]
+    )
 
 
 def clarification_keyboard(
@@ -165,7 +214,10 @@ def budget_status_keyboard(*, can_set_from_income: bool) -> InlineKeyboardMarkup
 
 
 def category_choice_keyboard(
-    clarification_id: int, categories: Iterable[Category]
+    clarification_id: int,
+    categories: Iterable[Category],
+    *,
+    planned_expense_id: int | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -193,9 +245,16 @@ def category_choice_keyboard(
             [
                 InlineKeyboardButton(
                     text="Скасувати",
-                    callback_data=ClarificationCallback(
-                        action="cancel", clarification_id=clarification_id
-                    ).pack(),
+                    callback_data=(
+                        PlannedExpenseActionCallback(
+                            action="edit_cancel",
+                            planned_expense_id=planned_expense_id,
+                        ).pack()
+                        if planned_expense_id is not None
+                        else ClarificationCallback(
+                            action="cancel", clarification_id=clarification_id
+                        ).pack()
+                    ),
                 )
             ],
         ]
@@ -259,6 +318,8 @@ __all__ = [
     "category_choice_keyboard",
     "pending_transactions_keyboard",
     "planned_expense_confirmation_keyboard",
+    "planned_expense_edit_cancel_keyboard",
+    "planned_expense_edit_keyboard",
     "planned_expenses_keyboard",
     "transaction_category_keyboard",
     "uncategorized_transactions_keyboard",

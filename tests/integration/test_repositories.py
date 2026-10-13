@@ -154,7 +154,14 @@ async def test_fallback_categories_are_removed_from_effective_schema(
 
     assert "other" not in codes
     assert "other_income" not in codes
-    assert {"education", "taxes_documents", "gifts", "refunds", "bonus"} <= codes
+    assert {
+        "education",
+        "taxes_documents",
+        "gifts",
+        "communications",
+        "refunds",
+        "bonus",
+    } <= codes
 
 
 @pytest.mark.asyncio
@@ -323,6 +330,51 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
     assert len(pending) == 1
     assert pending[0].status is PlannedExpenseStatus.PENDING
 
+    clarification_service = ClarificationService(factory)
+    edit_context = await clarification_service.begin_plan_edit(
+        household_id=household.id,
+        member_id=member.id,
+        original_message_id=801,
+        planned_expense_id=pending[0].id,
+        original_text="Заплануй страховку 100",
+        field="amount",
+        question="Яку нову суму встановити?",
+    )
+    assert (
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=pending[0].id + 1,
+        )
+        is False
+    )
+    assert await clarification_service.get_by_id(edit_context.id) is not None
+    assert (
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=pending[0].id,
+        )
+        is True
+    )
+
+    async with factory() as db_session:
+        communications = await CategoryRepository(db_session).get_effective_by_code(
+            household.id, "communications"
+        )
+        assert communications is not None
+    edited = await service.update_details(
+        household_id=household.id,
+        planned_expense_id=pending[0].id,
+        amount=Decimal("110.00"),
+        category_id=communications.id,
+        description="Мобільний зв’язок",
+    )
+    assert edited is not None
+    assert edited.amount == Decimal("110.00")
+    assert edited.category.code == "communications"
+    assert edited.description == "Мобільний зв’язок"
+
     scheduled = await service.schedule(
         household_id=household.id,
         planned_expense_id=pending[0].id,
@@ -334,7 +386,7 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
         currency="EUR",
         today=date(2026, 10, 27),
     )
-    assert budget.reserved == Decimal("100.00")
+    assert budget.reserved == Decimal("110.00")
 
     reminders = await service.due_reminders(datetime(2026, 10, 27, 8, tzinfo=UTC))
     assert [(item.planned_expense.id, item.kind) for item in reminders] == [
@@ -352,7 +404,7 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
     assert paid.status is PlannedExpenseStatus.PAID
     active = await service.list_active(household.id)
     assert [(item.amount, item.due_date) for item in active] == [
-        (Decimal("100.00"), date(2026, 11, 28))
+        (Decimal("110.00"), date(2026, 11, 28))
     ]
     totals = await ReportService(factory).totals(
         household_id=household.id,
@@ -360,7 +412,7 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
         end_date=date(2026, 11, 1),
         currency="EUR",
     )
-    assert totals.expense == Decimal("100.00")
+    assert totals.expense == Decimal("110.00")
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,31 @@ class ClarificationService:
             planned_expense_id=planned_expense_id,
         )
 
+    async def begin_plan_edit(
+        self,
+        *,
+        household_id: int,
+        member_id: int,
+        original_message_id: int,
+        planned_expense_id: int,
+        original_text: str,
+        field: str,
+        question: str,
+        missing_category_type: TransactionType | None = None,
+    ) -> TransactionClarification:
+        if field not in {"amount", "category", "date", "description"}:
+            raise ValueError("unsupported planned expense edit field")
+        return await self.begin(
+            household_id=household_id,
+            member_id=member_id,
+            original_message_id=original_message_id,
+            original_text=original_text,
+            question=question,
+            missing_category_type=missing_category_type,
+            kind=f"planned_edit_{field}",
+            planned_expense_id=planned_expense_id,
+        )
+
     async def advance(
         self,
         clarification_id: int,
@@ -154,6 +179,18 @@ class ClarificationService:
     async def cancel_for_member(self, *, household_id: int, member_id: int) -> bool:
         clarification = await self.get(household_id=household_id, member_id=member_id)
         return False if clarification is None else await self.cancel(clarification.id)
+
+    async def cancel_plan_context(
+        self, *, household_id: int, member_id: int, planned_expense_id: int
+    ) -> bool:
+        clarification = await self.get(household_id=household_id, member_id=member_id)
+        if (
+            clarification is None
+            or clarification.planned_expense_id != planned_expense_id
+            or not clarification.kind.startswith("planned_")
+        ):
+            return False
+        return await self.cancel(clarification.id)
 
     async def remember_alias(
         self, *, household_id: int, member_id: int, alias: str

@@ -9,15 +9,20 @@ import pytest
 
 from application.report_scheduler import ReportScheduler
 from application.services import BudgetStatus, PlannedExpenseService, ReminderCandidate
-from bot.handlers.commands import planned_expense_callback, recognize_plain_message
-from bot.keyboards import PlannedExpenseActionCallback
+from bot.handlers.commands import (
+    category_choice_callback,
+    planned_expense_callback,
+    recognize_plain_message,
+)
+from bot.keyboards import CategoryChoiceCallback, PlannedExpenseActionCallback
 from domain.enums import (
     PlannedExpenseRecurrence,
     PlannedExpenseStatus,
     ReminderKind,
+    TransactionType,
 )
 from domain.models import RecognitionIntent, RecognitionResult, RecognizedPlannedExpense
-from infrastructure.database import Household, Member
+from infrastructure.database import Household, Member, TransactionClarification
 from infrastructure.repositories import PlannedExpenseRepository
 
 
@@ -265,6 +270,7 @@ async def test_plan_confirmation_schedules_expense() -> None:
         get=AsyncMock(return_value=pending),
         schedule=AsyncMock(return_value=target),
     )
+    clarification_service = SimpleNamespace(cancel_plan_context=AsyncMock(return_value=False))
     callback = SimpleNamespace(message=SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
 
     await planned_expense_callback(
@@ -273,7 +279,7 @@ async def test_plan_confirmation_schedules_expense() -> None:
         household,
         member,
         service,
-        SimpleNamespace(),
+        clarification_service,
     )
 
     service.schedule.assert_awaited_once_with(
@@ -296,6 +302,7 @@ async def test_monthly_plan_requires_explicit_monthly_confirmation() -> None:
         get=AsyncMock(return_value=pending),
         schedule=AsyncMock(return_value=target),
     )
+    clarification_service = SimpleNamespace(cancel_plan_context=AsyncMock(return_value=False))
     callback = SimpleNamespace(message=SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
 
     await planned_expense_callback(
@@ -304,7 +311,7 @@ async def test_monthly_plan_requires_explicit_monthly_confirmation() -> None:
         household,
         member,
         service,
-        SimpleNamespace(),
+        clarification_service,
     )
 
     service.schedule.assert_awaited_once_with(
@@ -313,3 +320,144 @@ async def test_monthly_plan_requires_explicit_monthly_confirmation() -> None:
         recurrence=PlannedExpenseRecurrence.MONTHLY,
     )
     assert "Щомісячну витрату заплановано" in callback.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_plan_edit_amount_starts_correlated_clarification() -> None:
+    target = plan()
+    stored = SimpleNamespace(id=9, question="💶 Яку нову суму встановити?")
+    clarification_service = SimpleNamespace(
+        begin_plan_edit=AsyncMock(return_value=stored)
+    )
+    callback = SimpleNamespace(
+        message=SimpleNamespace(message_id=77, edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    await planned_expense_callback(
+        callback,
+        PlannedExpenseActionCallback(action="edit_amount", planned_expense_id=42),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я"),
+        Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена"),
+        SimpleNamespace(get=AsyncMock(return_value=target)),
+        clarification_service,
+    )
+
+    clarification_service.begin_plan_edit.assert_awaited_once()
+    call = clarification_service.begin_plan_edit.await_args.kwargs
+    assert call["planned_expense_id"] == 42
+    assert call["field"] == "amount"
+    assert "100.00 EUR" in call["original_text"]
+    assert callback.message.edit_text.await_args.args[0] == stored.question
+
+
+@pytest.mark.asyncio
+async def test_plan_category_can_be_changed_without_losing_other_fields() -> None:
+    target = plan()
+    target.status = PlannedExpenseStatus.PENDING
+    communications = SimpleNamespace(
+        id=15,
+        code="communications",
+        name="Мобільний зв’язок та інтернет",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    updated = SimpleNamespace(**target.__dict__)
+    updated.category = communications
+    clarification = SimpleNamespace(
+        id=9,
+        household_id=1,
+        member_id=2,
+        missing_category_type="expense",
+        expires_at=datetime.now(UTC).replace(year=2027),
+        kind="planned_edit_category",
+        planned_expense_id=42,
+    )
+    clarification_service = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=clarification),
+        cancel=AsyncMock(return_value=True),
+    )
+    planned_service = SimpleNamespace(update_details=AsyncMock(return_value=updated))
+    callback = SimpleNamespace(message=SimpleNamespace(edit_text=AsyncMock()), answer=AsyncMock())
+
+    await category_choice_callback(
+        callback,
+        CategoryChoiceCallback(action="select", clarification_id=9, category_id=15),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я"),
+        Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        clarification_service,
+        SimpleNamespace(list=AsyncMock(return_value=(communications,))),
+        planned_expense_service=planned_service,
+    )
+
+    planned_service.update_details.assert_awaited_once_with(
+        household_id=1,
+        planned_expense_id=42,
+        category_id=15,
+    )
+    assert updated.amount == Decimal("100.00")
+    assert updated.due_date == date(2026, 10, 28)
+    assert "Мобільний зв’язок та інтернет" in callback.message.edit_text.await_args.args[0]
+    clarification_service.cancel.assert_awaited_once_with(9)
+
+
+@pytest.mark.asyncio
+async def test_plan_amount_edit_updates_only_amount_from_followup() -> None:
+    target = plan()
+    target.amount = Decimal("11.00")
+    clarification = TransactionClarification(
+        id=9,
+        household_id=1,
+        member_id=2,
+        original_message_id=77,
+        original_text="Заплануй мобільний зв’язок, 100 EUR, на 2026-10-28.",
+        question="💶 Яку нову суму встановити?",
+        attempts=0,
+        expires_at=datetime(2027, 1, 1, tzinfo=UTC),
+        kind="planned_edit_amount",
+        planned_expense_id=42,
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
+        transactions=(),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+        planned_expenses=(
+            RecognizedPlannedExpense(
+                amount=Decimal("11.00"),
+                currency="EUR",
+                category_code="communications",
+                description="Мобільний зв’язок",
+                due_date=date(2026, 10, 28),
+            ),
+        ),
+    )
+    clarification_service = SimpleNamespace(
+        get=AsyncMock(return_value=clarification),
+        cancel=AsyncMock(return_value=True),
+    )
+    planned_service = SimpleNamespace(update_details=AsyncMock(return_value=target))
+    message = SimpleNamespace(message_id=78, text="11 євро", answer=AsyncMock())
+    transaction_service = SimpleNamespace(create_pending=AsyncMock())
+
+    await recognize_plain_message(
+        message,
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR"),
+        Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена"),
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        transaction_service,
+        clarification_service=clarification_service,
+        planned_expense_service=planned_service,
+    )
+
+    planned_service.update_details.assert_awaited_once_with(
+        household_id=1,
+        planned_expense_id=42,
+        amount=Decimal("11.00"),
+    )
+    assert "€11.00" in message.answer.await_args.args[0]
+    clarification_service.cancel.assert_awaited_once_with(9)
+    transaction_service.create_pending.assert_not_awaited()

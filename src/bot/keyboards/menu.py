@@ -3,7 +3,8 @@ from collections.abc import Iterable
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from infrastructure.database import Category
+from bot.keyboards.transactions import planned_expenses_keyboard
+from infrastructure.database import Category, PlannedExpense
 
 
 class MenuCallback(CallbackData, prefix="menu"):
@@ -28,6 +29,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [_menu_button("🧾 Останні операції", "last"), _menu_button("📊 Статистика", "stats")],
+            [_menu_button("📌 Заплановані витрати", "planned")],
             [_menu_button("🗂 Без категорії", "uncategorized")],
             [_menu_button("🏷 Категорії", "categories"), _menu_button("⚙️ Налаштування", "settings")],
             [_menu_button("↩️ Скасувати останню", "undo")],
@@ -187,6 +189,14 @@ def back_to_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[_menu_button("← Назад", "home")]])
 
 
+def planned_expenses_menu_keyboard(
+    plans: Iterable[PlannedExpense],
+) -> InlineKeyboardMarkup:
+    rows = list(planned_expenses_keyboard(plans).inline_keyboard)
+    rows.append([_menu_button("← До меню", "home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 __all__ = [
     "CategoryMenuCallback",
     "MenuCallback",
@@ -198,6 +208,7 @@ __all__ = [
     "category_types_keyboard",
     "main_menu_keyboard",
     "month_selection_keyboard",
+    "planned_expenses_menu_keyboard",
     "settings_keyboard",
     "stats_menu_keyboard",
     "timezone_keyboard",

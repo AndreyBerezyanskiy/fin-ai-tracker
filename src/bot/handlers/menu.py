@@ -9,10 +9,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from application.services import CategoryService, HouseholdSettingsService, TransactionService
+from application.services import (
+    CategoryService,
+    HouseholdSettingsService,
+    PlannedExpenseService,
+    TransactionService,
+)
 from bot.handlers.commands import (
     _currency_prefix,
     _format_transaction_line,
+    _planned_expenses_text,
     _stats_period,
     _today,
     _uncategorized_text,
@@ -28,6 +34,7 @@ from bot.keyboards import (
     category_types_keyboard,
     main_menu_keyboard,
     month_selection_keyboard,
+    planned_expenses_menu_keyboard,
     settings_keyboard,
     stats_menu_keyboard,
     timezone_keyboard,
@@ -104,6 +111,7 @@ async def menu_callback(
     transaction_service: TransactionService,
     category_service: CategoryService,
     state: FSMContext,
+    planned_expense_service: PlannedExpenseService | None = None,
 ) -> None:
     section = callback_data.section
     if section == "home":
@@ -146,6 +154,25 @@ async def menu_callback(
     if section == "categories":
         await state.clear()
         await _edit(callback, "Оберіть тип категорій", reply_markup=category_types_keyboard())
+        return
+    if section == "planned":
+        if planned_expense_service is None:
+            await callback.answer("Сервіс запланованих витрат недоступний.", show_alert=True)
+            return
+        plans = await planned_expense_service.list_active(household.id)
+        if not plans:
+            await _edit(
+                callback,
+                "📌 Запланованих витрат немає.\n\n"
+                "Напишіть, наприклад: «Заплануй страховку 100 євро на 28 жовтня».",
+                reply_markup=back_to_main_keyboard(),
+            )
+            return
+        await _edit(
+            callback,
+            _planned_expenses_text(plans, household.currency),
+            reply_markup=planned_expenses_menu_keyboard(plans),
+        )
         return
     if section == "last":
         transactions = await transaction_service.list_recent(

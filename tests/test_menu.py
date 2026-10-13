@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,7 +18,7 @@ from bot.keyboards import (
     SettingsMenuCallback,
     main_menu_keyboard,
 )
-from domain.enums import TransactionType
+from domain.enums import PlannedExpenseStatus, TransactionType
 from infrastructure.database import Category, Household
 
 
@@ -27,11 +28,83 @@ def test_main_menu_contains_primary_sections() -> None:
     assert labels == [
         "🧾 Останні операції",
         "📊 Статистика",
+        "📌 Заплановані витрати",
         "🗂 Без категорії",
         "🏷 Категорії",
         "⚙️ Налаштування",
         "↩️ Скасувати останню",
     ]
+
+
+@pytest.mark.asyncio
+async def test_planned_expenses_are_available_from_main_menu() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+    )
+    plan = SimpleNamespace(
+        id=42,
+        status=PlannedExpenseStatus.SCHEDULED,
+        amount=Decimal("11.00"),
+        currency="EUR",
+        description="Мобільний зв’язок",
+        due_date=date(2026, 10, 23),
+        recurrence=None,
+        category=SimpleNamespace(name="Мобільний зв’язок та інтернет"),
+    )
+    planned_service = SimpleNamespace(list_active=AsyncMock(return_value=(plan,)))
+
+    await menu_callback(
+        callback,
+        MenuCallback(section="planned"),
+        household,
+        SimpleNamespace(id=2),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        SimpleNamespace(clear=AsyncMock()),
+        planned_expense_service=planned_service,
+    )
+
+    planned_service.list_active.assert_awaited_once_with(1)
+    text = callback.message.edit_text.await_args.args[0]
+    assert "Заплановані витрати" in text
+    assert "Мобільний зв’язок — €11.00" in text
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert "✅ Сплачено #42" in labels
+    assert "📅 Перенести" in labels
+    assert "✏️ Змінити" in labels
+    assert "🗑 Видалити" in labels
+    assert "← До меню" in labels
+
+
+@pytest.mark.asyncio
+async def test_empty_planned_expenses_menu_has_back_button() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    await menu_callback(
+        callback,
+        MenuCallback(section="planned"),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR"),
+        SimpleNamespace(id=2),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        SimpleNamespace(clear=AsyncMock()),
+        planned_expense_service=SimpleNamespace(list_active=AsyncMock(return_value=())),
+    )
+
+    assert "Запланованих витрат немає" in callback.message.edit_text.await_args.args[0]
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "← Назад"
 
 
 @pytest.mark.asyncio

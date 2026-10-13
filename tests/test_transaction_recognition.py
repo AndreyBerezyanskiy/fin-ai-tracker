@@ -37,6 +37,9 @@ CATEGORIES = (
     CategoryDefinition("entertainment", "Розваги", TransactionType.EXPENSE),
     CategoryDefinition("travel", "Подорожі", TransactionType.EXPENSE),
     CategoryDefinition("subscriptions", "Підписки", TransactionType.EXPENSE),
+    CategoryDefinition(
+        "communications", "Мобільний зв’язок та інтернет", TransactionType.EXPENSE
+    ),
     CategoryDefinition("gifts", "Подарунки", TransactionType.EXPENSE),
     CategoryDefinition("education", "Освіта", TransactionType.EXPENSE),
     CategoryDefinition("taxes_documents", "Податки та документи", TransactionType.EXPENSE),
@@ -426,6 +429,81 @@ async def test_recognizes_monthly_planned_expense() -> None:
     assert plan.amount == Decimal("100.00")
     assert plan.due_date == date(2026, 10, 28)
     assert plan.recurrence == "monthly"
+
+
+async def test_future_expense_is_converted_to_planned_expense_server_side() -> None:
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=[
+            AITransactionCandidate.model_validate(
+                transaction(
+                    "expense",
+                    "11",
+                    "communications",
+                    "Мобільний зв’язок",
+                    "2026-10-23",
+                )
+            )
+        ],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+    assert result.transactions == ()
+    assert result.planned_expenses[0].amount == Decimal("11.00")
+    assert result.planned_expenses[0].due_date == date(2026, 10, 23)
+    assert result.planned_expenses[0].category_code == "communications"
+
+
+async def test_future_expense_without_amount_asks_contextual_plan_question() -> None:
+    raw = transaction(
+        "expense", "11", "communications", "Мобільний зв’язок", "2026-10-23"
+    )
+    raw["amount"] = None
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=[AITransactionCandidate.model_validate(raw)],
+        needs_clarification=True,
+        clarification_question="AI question",
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.intent is RecognitionIntent.CREATE_PLANNED_EXPENSES
+    assert result.needs_clarification is True
+    assert result.clarification_question == "Яку суму запланувати для «Мобільний зв’язок»?"
+
+
+async def test_mixed_completed_and_future_expenses_must_be_sent_separately() -> None:
+    parsed = AIRecognitionResponse(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=[
+            AITransactionCandidate.model_validate(
+                transaction("expense", "4", "groceries", "Хліб", "2026-10-07")
+            ),
+            AITransactionCandidate.model_validate(
+                transaction(
+                    "expense",
+                    "11",
+                    "communications",
+                    "Мобільний зв’язок",
+                    "2026-10-23",
+                )
+            ),
+        ],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    result, _parse = await run_recognition(parsed)
+
+    assert result.needs_clarification is True
+    assert "окремими повідомленнями" in (result.clarification_question or "")
+    assert result.transactions == ()
+    assert result.planned_expenses == ()
 
 
 async def test_planned_expense_without_date_requests_date_and_preserves_intent() -> None:

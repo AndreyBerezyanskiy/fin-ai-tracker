@@ -42,6 +42,8 @@ from bot.keyboards import (
     main_menu_keyboard,
     pending_transactions_keyboard,
     planned_expense_confirmation_keyboard,
+    planned_expense_edit_cancel_keyboard,
+    planned_expense_edit_keyboard,
     planned_expenses_keyboard,
     transaction_category_keyboard,
     uncategorized_transactions_keyboard,
@@ -583,6 +585,19 @@ def _format_planned_expense_confirmation(plan: object) -> str:
     return f"{details}\n\n🔁 Як запланувати: один раз чи щомісяця?"
 
 
+def _planned_expense_keyboard(plan: object):
+    if plan.status is PlannedExpenseStatus.PENDING:  # type: ignore[attr-defined]
+        return planned_expense_confirmation_keyboard(plan.id)  # type: ignore[attr-defined]
+    return planned_expenses_keyboard((plan,))
+
+
+def _planned_expense_edit_text(plan: object) -> str:
+    return (
+        f"{_format_planned_expense(plan, title='✏️ Редагування плану')}"
+        "\n\nЩо потрібно змінити?"
+    )
+
+
 async def planned_command(
     message: Message,
     household: Household,
@@ -595,6 +610,14 @@ async def planned_command(
             "Напишіть, наприклад: «Заплануй страховку 100 євро на 28 жовтня»."
         )
         return
+
+    await message.answer(
+        _planned_expenses_text(plans, household.currency),
+        reply_markup=planned_expenses_keyboard(plans),
+    )
+
+
+def _planned_expenses_text(plans: tuple[object, ...], currency: str) -> str:
     total = sum((plan.amount for plan in plans), Decimal("0.00"))
     lines = ["📌 Заплановані витрати", ""]
     for plan in plans:
@@ -603,10 +626,8 @@ async def planned_command(
             f"#{plan.id} · {plan.due_date:%d.%m.%Y} · {plan.description} — "
             f"{_currency_prefix(plan.currency)}{plan.amount:.2f}{repeat}"
         )
-    lines.extend(
-        ["", f"Усього зарезервовано: {_currency_prefix(household.currency)}{total:.2f}"]
-    )
-    await message.answer("\n".join(lines), reply_markup=planned_expenses_keyboard(plans))
+    lines.extend(["", f"Усього зарезервовано: {_currency_prefix(currency)}{total:.2f}"])
+    return "\n".join(lines)
 
 
 async def planned_expense_callback(
@@ -616,6 +637,7 @@ async def planned_expense_callback(
     member: Member,
     planned_expense_service: PlannedExpenseService,
     clarification_service: ClarificationService,
+    category_service: CategoryService | None = None,
 ) -> None:
     plan = await planned_expense_service.get(
         household.id, callback_data.planned_expense_id
@@ -624,6 +646,85 @@ async def planned_expense_callback(
         await callback.answer("Заплановану витрату не знайдено.", show_alert=True)
         return
     action = callback_data.action
+    if action == "edit":
+        if plan.status not in {PlannedExpenseStatus.PENDING, PlannedExpenseStatus.SCHEDULED}:
+            await callback.answer("Цей план уже оброблено.", show_alert=True)
+            return
+        if callback.message is not None:
+            await callback.message.edit_text(
+                _planned_expense_edit_text(plan),
+                reply_markup=planned_expense_edit_keyboard(plan.id),
+            )
+        await callback.answer()
+        return
+    if action in {"edit_back", "edit_cancel"}:
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=plan.id,
+        )
+        if callback.message is not None:
+            await callback.message.edit_text(
+                _format_planned_expense_confirmation(plan)
+                if plan.status is PlannedExpenseStatus.PENDING
+                else _format_planned_expense(plan),
+                reply_markup=_planned_expense_keyboard(plan),
+            )
+        await callback.answer()
+        return
+    if action in {"edit_amount", "edit_category", "edit_date", "edit_description"}:
+        if plan.status not in {PlannedExpenseStatus.PENDING, PlannedExpenseStatus.SCHEDULED}:
+            await callback.answer("Цей план уже оброблено.", show_alert=True)
+            return
+        if callback.message is None:
+            await callback.answer("Не вдалося почати редагування.", show_alert=True)
+            return
+        field = action.removeprefix("edit_")
+        questions = {
+            "amount": "💶 Яку нову суму встановити?",
+            "category": f"🏷 Оберіть категорію для «{plan.description}».",
+            "date": "📅 На яку дату запланувати оплату?",
+            "description": "📝 Як змінити опис оплати?",
+        }
+        if field == "category" and category_service is None:
+            await callback.answer("Сервіс категорій недоступний.", show_alert=True)
+            return
+        clarification = await clarification_service.begin_plan_edit(
+            household_id=household.id,
+            member_id=member.id,
+            original_message_id=callback.message.message_id,
+            planned_expense_id=plan.id,
+            original_text=(
+                f"Заплануй {plan.description}, {plan.amount} {plan.currency}, "
+                f"на {plan.due_date.isoformat()}, категорія {plan.category.name}."
+            ),
+            field=field,
+            question=questions[field],
+            missing_category_type=(
+                TransactionType.EXPENSE if field == "category" else None
+            ),
+        )
+        if field == "category":
+            categories = tuple(
+                item
+                for item in await category_service.list(household.id)
+                if item.is_active and item.type is TransactionType.EXPENSE
+            )
+            await callback.message.edit_text(
+                clarification.question,
+                reply_markup=category_choice_keyboard(
+                    clarification.id,
+                    categories,
+                    planned_expense_id=plan.id,
+                ),
+            )
+        else:
+            await callback.message.edit_text(
+                clarification.question,
+                reply_markup=planned_expense_edit_cancel_keyboard(plan.id),
+            )
+        await callback.answer()
+        return
     if action in {"confirm_once", "confirm_monthly"}:
         recurrence = (
             PlannedExpenseRecurrence.MONTHLY if action == "confirm_monthly" else None
@@ -636,6 +737,11 @@ async def planned_expense_callback(
         if updated is None:
             await callback.answer("Цей план уже оброблено.", show_alert=True)
             return
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=plan.id,
+        )
         if callback.message is not None:
             title = (
                 "✅ Щомісячну витрату заплановано"
@@ -656,6 +762,11 @@ async def planned_expense_callback(
         if updated is None:
             await callback.answer("Цей план уже оброблено.", show_alert=True)
             return
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=plan.id,
+        )
         if callback.message is not None:
             await callback.message.edit_text(
                 _format_planned_expense(updated, title="❌ Заплановану витрату скасовано")
@@ -671,6 +782,11 @@ async def planned_expense_callback(
         if updated is None:
             await callback.answer("Цей план уже оброблено.", show_alert=True)
             return
+        await clarification_service.cancel_plan_context(
+            household_id=household.id,
+            member_id=member.id,
+            planned_expense_id=plan.id,
+        )
         if callback.message is not None:
             await callback.message.edit_text(
                 _format_planned_expense(updated, title="✅ Оплату записано у витрати")
@@ -739,6 +855,84 @@ async def _resolve_plan_postpone(
     await message.answer(_format_planned_expense(updated, title="📅 Оплату перенесено"))
 
 
+async def _resolve_plan_edit(
+    message: Message,
+    *,
+    clarification: TransactionClarification,
+    household: Household,
+    member: Member,
+    transaction_recognition_service: TransactionRecognitionService,
+    planned_expense_service: PlannedExpenseService,
+    clarification_service: ClarificationService,
+    category_service: CategoryService | None,
+) -> None:
+    field = clarification.kind.removeprefix("planned_edit_")
+    result = await transaction_recognition_service.recognize(
+        message=clarification.original_text,
+        household=household,
+        member=member,
+        clarification_question=clarification.question,
+        clarification_answer=message.text or "",
+    )
+    if result.needs_clarification or not result.planned_expenses:
+        if clarification.attempts + 1 >= MAX_CLARIFICATION_ATTEMPTS:
+            await clarification_service.cancel(clarification.id)
+            await message.answer("Не вдалося змінити план. Редагування скасовано.")
+            return
+        updated_context = await clarification_service.advance(
+            clarification.id,
+            question=result.clarification_question or clarification.question,
+            missing_category_type=result.missing_category_type,
+        )
+        if updated_context is not None:
+            await _answer_clarification_question(
+                message,
+                clarification=updated_context,
+                household=household,
+                category_service=category_service,
+            )
+        return
+    recognized = result.planned_expenses[0]
+    changes: dict[str, object] = {}
+    if field == "amount":
+        changes["amount"] = recognized.amount
+    elif field == "date":
+        changes["due_date"] = recognized.due_date
+    elif field == "description":
+        changes["description"] = recognized.description
+    elif field == "category" and category_service is not None:
+        category = next(
+            (
+                item
+                for item in await category_service.list(household.id)
+                if item.is_active
+                and item.type is TransactionType.EXPENSE
+                and item.code == recognized.category_code
+            ),
+            None,
+        )
+        if category is not None:
+            changes["category_id"] = category.id
+    if not changes:
+        await message.answer("Не вдалося визначити нове значення. Спробуйте ще раз.")
+        return
+    updated = await planned_expense_service.update_details(
+        household_id=household.id,
+        planned_expense_id=clarification.planned_expense_id or 0,
+        **changes,
+    )
+    await clarification_service.cancel(clarification.id)
+    if updated is None:
+        await message.answer("Цей план уже оброблено.")
+        return
+    await message.answer(
+        _format_planned_expense_confirmation(updated)
+        if updated.status is PlannedExpenseStatus.PENDING
+        else _format_planned_expense(updated, title="✅ План оновлено"),
+        reply_markup=_planned_expense_keyboard(updated),
+    )
+
+
 async def _answer_clarification_question(
     message: Message,
     *,
@@ -756,7 +950,16 @@ async def _answer_clarification_question(
         )
         await message.answer(
             clarification.question,
-            reply_markup=category_choice_keyboard(clarification.id, categories),
+            reply_markup=category_choice_keyboard(
+                clarification.id,
+                categories,
+                    planned_expense_id=(
+                        getattr(clarification, "planned_expense_id", None)
+                        if getattr(clarification, "kind", None)
+                        == "planned_edit_category"
+                        else None
+                    ),
+            ),
         )
         return
     await message.answer(
@@ -829,6 +1032,26 @@ async def recognize_plain_message(
                     transaction_type=TransactionType(clarification.missing_category_type),
                     name=name,
                 )
+                if clarification.kind == "planned_edit_category":
+                    if planned_expense_service is None:
+                        await message.answer("Сервіс запланованих витрат недоступний.")
+                        return
+                    updated = await planned_expense_service.update_details(
+                        household_id=household.id,
+                        planned_expense_id=clarification.planned_expense_id or 0,
+                        category_id=category.id,
+                    )
+                    await clarification_service.cancel(clarification.id)
+                    if updated is None:
+                        await message.answer("Цей план уже оброблено.")
+                    else:
+                        await message.answer(
+                            _format_planned_expense_confirmation(updated)
+                            if updated.status is PlannedExpenseStatus.PENDING
+                            else _format_planned_expense(updated, title="✅ План оновлено"),
+                            reply_markup=_planned_expense_keyboard(updated),
+                        )
+                    return
                 await _resolve_clarification(
                     message,
                     answer=(
@@ -844,6 +1067,21 @@ async def recognize_plain_message(
                     clarification_service=clarification_service,
                     category_service=category_service,
                     store_original_text=store_original_text,
+                )
+                return
+            if (clarification.kind or "transaction").startswith("planned_edit_"):
+                if planned_expense_service is None:
+                    await message.answer("Сервіс запланованих витрат недоступний.")
+                    return
+                await _resolve_plan_edit(
+                    message,
+                    clarification=clarification,
+                    household=household,
+                    member=member,
+                    transaction_recognition_service=transaction_recognition_service,
+                    planned_expense_service=planned_expense_service,
+                    clarification_service=clarification_service,
+                    category_service=category_service,
                 )
                 return
             await _resolve_clarification(
@@ -1202,7 +1440,17 @@ async def category_choice_callback(
         updated = await clarification_service.request_category_name(clarification.id)
         if callback.message is not None and updated is not None:
             await callback.message.edit_reply_markup(reply_markup=None)
-            await callback.message.answer(updated.question)
+            await callback.message.answer(
+                updated.question,
+                reply_markup=(
+                    planned_expense_edit_cancel_keyboard(
+                        clarification.planned_expense_id
+                    )
+                    if clarification.kind == "planned_edit_category"
+                    and clarification.planned_expense_id is not None
+                    else None
+                ),
+            )
         await callback.answer()
         return
     if callback_data.action != "select":
@@ -1224,6 +1472,29 @@ async def category_choice_callback(
         return
     if callback.message is None:
         await callback.answer("Не вдалося обробити відповідь.", show_alert=True)
+        return
+    if clarification.kind == "planned_edit_category":
+        if planned_expense_service is None:
+            await callback.answer(
+                "Сервіс запланованих витрат недоступний.", show_alert=True
+            )
+            return
+        updated = await planned_expense_service.update_details(
+            household_id=household.id,
+            planned_expense_id=clarification.planned_expense_id or 0,
+            category_id=category.id,
+        )
+        await clarification_service.cancel(clarification.id)
+        if updated is None:
+            await callback.answer("Цей план уже оброблено.", show_alert=True)
+            return
+        await callback.message.edit_text(
+            _format_planned_expense_confirmation(updated)
+            if updated.status is PlannedExpenseStatus.PENDING
+            else _format_planned_expense(updated, title="✅ План оновлено"),
+            reply_markup=_planned_expense_keyboard(updated),
+        )
+        await callback.answer("Категорію змінено.")
         return
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer()

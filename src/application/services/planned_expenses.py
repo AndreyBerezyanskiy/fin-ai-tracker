@@ -3,6 +3,7 @@ from __future__ import annotations
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -143,6 +144,57 @@ class PlannedExpenseService:
                 return None
             plan.due_date = due_date
             await repository.clear_deliveries(plan.id)
+            await session.flush()
+            return plan
+
+    async def update_details(
+        self,
+        *,
+        household_id: int,
+        planned_expense_id: int,
+        amount: Decimal | None = None,
+        category_id: int | None = None,
+        due_date: date | None = None,
+        description: str | None = None,
+    ) -> PlannedExpense | None:
+        if all(value is None for value in (amount, category_id, due_date, description)):
+            raise ValueError("at least one planned expense field is required")
+        if amount is not None and amount <= 0:
+            raise ValueError("planned expense amount must be positive")
+        if description is not None and not description.strip():
+            raise ValueError("planned expense description must not be empty")
+        async with session_scope(self.session_factory) as session:
+            repository = PlannedExpenseRepository(session)
+            plan = await repository.get_for_household(
+                household_id=household_id, planned_expense_id=planned_expense_id, lock=True
+            )
+            if plan is None or plan.status not in {
+                PlannedExpenseStatus.PENDING,
+                PlannedExpenseStatus.SCHEDULED,
+            }:
+                return None
+            if category_id is not None:
+                category = next(
+                    (
+                        item
+                        for item in await CategoryRepository(session).list_available(
+                            household_id, transaction_type=TransactionType.EXPENSE
+                        )
+                        if item.id == category_id
+                    ),
+                    None,
+                )
+                if category is None:
+                    raise ValueError("planned expense category is unavailable")
+                plan.category_id = category.id
+                plan.category = category
+            if amount is not None:
+                plan.amount = amount
+            if due_date is not None and due_date != plan.due_date:
+                plan.due_date = due_date
+                await repository.clear_deliveries(plan.id)
+            if description is not None:
+                plan.description = description.strip()[:500]
             await session.flush()
             return plan
 
