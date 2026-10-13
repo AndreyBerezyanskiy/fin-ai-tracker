@@ -186,25 +186,11 @@ class ProcessedTelegramUpdate(Base):
 
 class Category(Base):
     __tablename__ = "categories"
-    __table_args__ = (
-        Index(
-            "uq_categories_system_code",
-            "code",
-            unique=True,
-            postgresql_where=text("household_id IS NULL"),
-        ),
-        Index(
-            "uq_categories_household_code",
-            "household_id",
-            "code",
-            unique=True,
-            postgresql_where=text("household_id IS NOT NULL"),
-        ),
-    )
+    __table_args__ = (Index("uq_categories_household_code", "household_id", "code", unique=True),)
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
-    household_id: Mapped[int | None] = mapped_column(
-        ForeignKey("households.id", ondelete="CASCADE"), nullable=True, index=True
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
     )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -213,7 +199,7 @@ class Category(Base):
         Boolean, nullable=False, default=True, server_default=text("true")
     )
 
-    household: Mapped[Household | None] = relationship(back_populates="categories")
+    household: Mapped[Household] = relationship(back_populates="categories")
     transactions: Mapped[list[Transaction]] = relationship(back_populates="category")
     budgets: Mapped[list[Budget]] = relationship(back_populates="category")
 

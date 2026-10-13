@@ -21,6 +21,7 @@ from application.services import (
     ReportService,
     TransactionService,
 )
+from domain.category_templates import CATEGORY_TEMPLATES
 from domain.enums import (
     PlannedExpenseRecurrence,
     PlannedExpenseStatus,
@@ -64,6 +65,26 @@ pytestmark = [
         reason="set TEST_DATABASE_URL to a disposable PostgreSQL database",
     ),
 ]
+
+
+async def add_template_categories(
+    session: AsyncSession, household_id: int, *codes: str
+) -> dict[str, Category]:
+    repository = CategoryRepository(session)
+    templates = {item.code: item for item in CATEGORY_TEMPLATES}
+    result: dict[str, Category] = {}
+    for code in codes:
+        category = await repository.get_effective_by_code(household_id, code)
+        if category is None:
+            template = templates[code]
+            category = await repository.create(
+                household_id=household_id,
+                code=template.code,
+                name=template.name,
+                transaction_type=template.type,
+            )
+        result[code] = category
+    return result
 
 
 @pytest.fixture(scope="session")
@@ -143,25 +164,113 @@ async def test_household_and_member_are_created_idempotently(session: AsyncSessi
 
 
 @pytest.mark.asyncio
-async def test_fallback_categories_are_removed_from_effective_schema(
+async def test_new_household_starts_without_categories(
     session: AsyncSession,
 ) -> None:
     household = await HouseholdRepository(session).get_or_create(
         telegram_chat_id=-100126, name="Категорії"
     )
     categories = await CategoryRepository(session).list_available(household.id)
-    codes = {item.code for item in categories}
+    assert categories == []
 
-    assert "other" not in codes
-    assert "other_income" not in codes
-    assert {
-        "education",
-        "taxes_documents",
-        "gifts",
-        "communications",
-        "refunds",
-        "bonus",
-    } <= codes
+
+@pytest.mark.asyncio
+async def test_categories_are_isolated_by_household(session: AsyncSession) -> None:
+    first = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100127, name="Перша сім’я"
+    )
+    second = await HouseholdRepository(session).get_or_create(
+        telegram_chat_id=-100128, name="Друга сім’я"
+    )
+    repository = CategoryRepository(session)
+    first_category = await repository.create(
+        household_id=first.id,
+        code="pets",
+        name="Домашні тварини",
+        transaction_type=TransactionType.EXPENSE,
+    )
+
+    assert await repository.list_available(second.id) == []
+    assert await repository.get_for_household(second.id, first_category.id) is None
+    assert await repository.get_for_household(first.id, first_category.id) == first_category
+
+
+@pytest.mark.asyncio
+async def test_category_templates_deletion_and_assignment_are_household_safe(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        first = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Перша сім’я"
+        )
+        second = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100999, name="Друга сім’я"
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=first.id,
+            telegram_user_id=42,
+            display_name="Автор",
+        )
+
+    categories = CategoryService(service_session_factory)
+    available_templates = await categories.list_templates(
+        household_id=first.id, transaction_type=TransactionType.EXPENSE
+    )
+    assert "groceries" in {item.code for item in available_templates}
+
+    first_groceries = await categories.add_template(household_id=first.id, code="groceries")
+    second_groceries = await categories.add_template(household_id=second.id, code="groceries")
+    bonus = await categories.add_template(household_id=first.id, code="bonus")
+    assert first_groceries is not None
+    assert second_groceries is not None
+    assert bonus is not None
+    assert first_groceries.id != second_groceries.id
+    assert await categories.add_template(household_id=first.id, code="groceries") is None
+    assert await categories.delete_unused(household_id=first.id, code="bonus") is True
+
+    async with session_scope(service_session_factory) as db_session:
+        transaction = Transaction(
+            household_id=first.id,
+            member_id=member.id,
+            beneficiary_member_id=member.id,
+            category_id=None,
+            type=TransactionType.EXPENSE,
+            amount=Decimal("10.00"),
+            currency="EUR",
+            description="Продукти",
+            transaction_date=date(2026, 10, 13),
+            original_text="продукти 10",
+            telegram_chat_id=first.telegram_chat_id,
+            telegram_message_id=991,
+            status=TransactionStatus.CONFIRMED,
+        )
+        db_session.add(transaction)
+        await db_session.flush()
+        transaction_id = transaction.id
+
+    transactions = TransactionService(service_session_factory)
+    assert (
+        await transactions.assign_category(
+            household_id=first.id,
+            transaction_id=transaction_id,
+            category_id=second_groceries.id,
+        )
+        is None
+    )
+    assigned = await transactions.assign_category(
+        household_id=first.id,
+        transaction_id=transaction_id,
+        category_id=first_groceries.id,
+    )
+    assert assigned is not None
+    assert assigned.category_id == first_groceries.id
+    assert await categories.delete_unused(household_id=first.id, code="groceries") is False
+
+    renamed = await categories.rename(household_id=first.id, code="groceries", name="Їжа додому")
+    assert renamed is not None
+    assert renamed.name == "Їжа додому"
+    second_list = await categories.list(second.id)
+    assert [(item.code, item.name) for item in second_list] == [("groceries", "Продукти")]
 
 
 @pytest.mark.asyncio
@@ -248,10 +357,9 @@ async def test_uncategorized_transaction_can_be_reassigned(
             telegram_user_id=77,
             display_name="Автор",
         )
-        education = await CategoryRepository(db_session).get_effective_by_code(
-            household.id, "education"
-        )
-        assert education is not None
+        education = (await add_template_categories(db_session, household.id, "education"))[
+            "education"
+        ]
         transaction = Transaction(
             household_id=household.id,
             member_id=member.id,
@@ -301,6 +409,7 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
             telegram_user_id=77,
             display_name="Автор",
         )
+        await add_template_categories(db_session, household.id, "taxes_documents", "communications")
 
     recognition = RecognitionResult(
         intent=RecognitionIntent.CREATE_PLANNED_EXPENSES,
@@ -446,8 +555,7 @@ async def test_transaction_insert_is_decimal_and_idempotent(session: AsyncSessio
         telegram_user_id=43,
         display_name="Андрій",
     )
-    category = await session.scalar(select(Category).where(Category.code == "groceries"))
-    assert category is not None
+    category = (await add_template_categories(session, household.id, "groceries"))["groceries"]
 
     repository = TransactionRepository(session)
     parameters = {
@@ -519,7 +627,7 @@ async def test_category_and_budget_crud(session: AsyncSession) -> None:
     )
 
     assert category in available
-    assert {item.code for item in income_categories} == {"salary", "refunds", "bonus"}
+    assert income_categories == []
     assert updated.id == budget.id
     assert updated.amount == Decimal("125.00")
 
@@ -543,6 +651,7 @@ async def test_pending_batch_confirm_last_and_undo_flow(
             telegram_user_id=100,
             display_name="Олена",
         )
+        await add_template_categories(db_session, household.id, "health", "groceries")
 
     recognition = RecognitionResult(
         intent=RecognitionIntent.CREATE_TRANSACTIONS,
@@ -664,6 +773,7 @@ async def test_reports_and_budgets_use_confirmed_base_currency_transactions(
             telegram_user_id=98,
             display_name="Звіт",
         )
+        await add_template_categories(db_session, household.id, "salary", "groceries", "transport")
         categories = {
             item.code: item
             for item in await CategoryRepository(db_session).list_available(household.id)

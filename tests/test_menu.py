@@ -18,6 +18,7 @@ from bot.keyboards import (
     SettingsMenuCallback,
     main_menu_keyboard,
 )
+from domain.category_templates import CategoryTemplate
 from domain.enums import PlannedExpenseStatus, TransactionType
 from infrastructure.database import Category, Household
 
@@ -208,6 +209,104 @@ async def test_category_add_flow_uses_fsm() -> None:
     )
     state.clear.assert_awaited_once()
     assert "Категорію створено" in message.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_empty_category_list_offers_creation_and_templates() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    service = SimpleNamespace(list=AsyncMock(return_value=()))
+
+    await category_menu_callback(
+        callback,
+        CategoryMenuCallback(action="list", value="expense"),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я"),
+        service,
+        SimpleNamespace(),
+    )
+
+    text = callback.message.edit_text.await_args.args[0]
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert "ще немає" in text
+    assert "➕ Додати категорію" in labels
+    assert "📚 Додати із шаблонів" in labels
+
+
+@pytest.mark.asyncio
+async def test_category_template_can_be_added_from_menu() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім’я")
+    template = CategoryTemplate("groceries", "Продукти", TransactionType.EXPENSE)
+    category = Category(
+        id=20,
+        household_id=1,
+        code="groceries",
+        name="Продукти",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    service = SimpleNamespace(
+        list_templates=AsyncMock(return_value=(template,)),
+        add_template=AsyncMock(return_value=category),
+    )
+
+    await category_menu_callback(
+        callback,
+        CategoryMenuCallback(action="templates", value="expense"),
+        household,
+        service,
+        SimpleNamespace(),
+    )
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert "➕ Продукти" in [button.text for row in keyboard.inline_keyboard for button in row]
+
+    await category_menu_callback(
+        callback,
+        CategoryMenuCallback(action="add_template", value="groceries"),
+        household,
+        service,
+        SimpleNamespace(),
+    )
+    service.add_template.assert_awaited_once_with(household_id=1, code="groceries")
+    assert "Категорію додано" in callback.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_used_category_is_not_deleted_from_menu() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    category = Category(
+        id=20,
+        household_id=1,
+        code="groceries",
+        name="Продукти",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    service = SimpleNamespace(
+        list=AsyncMock(return_value=(category,)),
+        delete_unused=AsyncMock(return_value=False),
+    )
+
+    await category_menu_callback(
+        callback,
+        CategoryMenuCallback(action="delete", value="groceries"),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я"),
+        service,
+        SimpleNamespace(),
+    )
+
+    service.delete_unused.assert_awaited_once_with(household_id=1, code="groceries")
+    assert "не видалено" in callback.message.edit_text.await_args.args[0]
+    assert "приховати" in callback.message.edit_text.await_args.args[0]
 
 
 @pytest.mark.asyncio

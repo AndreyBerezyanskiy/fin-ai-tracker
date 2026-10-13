@@ -1745,6 +1745,9 @@ async def categories_command(
     for category in categories:
         status = "✅" if category.is_active else "⏸"
         sections[category.type].append(f"{status} {category.code} — {category.name}")
+    for lines in sections.values():
+        if len(lines) == 1:
+            lines.append("Категорій ще немає.")
     await message.answer("\n\n".join("\n".join(sections[item]) for item in TransactionType))
 
 

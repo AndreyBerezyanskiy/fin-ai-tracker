@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from domain.category_templates import CATEGORY_TEMPLATES, CategoryTemplate
 from domain.enums import TransactionType
 from infrastructure.database import Category, session_scope
 from infrastructure.repositories import (
@@ -43,6 +44,33 @@ class CategoryService:
                 transaction_type=transaction_type,
             )
 
+    async def list_templates(
+        self, *, household_id: int, transaction_type: TransactionType
+    ) -> tuple[CategoryTemplate, ...]:
+        async with self.session_factory() as session:
+            existing_codes = {
+                item.code
+                for item in await CategoryRepository(session).list_for_management(household_id)
+            }
+        return tuple(
+            item
+            for item in CATEGORY_TEMPLATES
+            if item.type is transaction_type and item.code not in existing_codes
+        )
+
+    async def add_template(self, *, household_id: int, code: str) -> Category | None:
+        template = next((item for item in CATEGORY_TEMPLATES if item.code == code), None)
+        if template is None:
+            return None
+        async with session_scope(self.session_factory) as session:
+            repository = CategoryRepository(session)
+            return await repository.create_if_absent(
+                household_id=household_id,
+                code=template.code,
+                name=template.name,
+                transaction_type=template.type,
+            )
+
     async def rename(self, *, household_id: int, code: str, name: str) -> Category | None:
         async with session_scope(self.session_factory) as session:
             return await CategoryRepository(session).rename_effective(
@@ -54,6 +82,14 @@ class CategoryService:
             return await CategoryRepository(session).set_effective_active(
                 household_id=household_id, code=code, is_active=is_active
             )
+
+    async def delete_unused(self, *, household_id: int, code: str) -> bool | None:
+        async with session_scope(self.session_factory) as session:
+            repository = CategoryRepository(session)
+            category = await repository.get_effective_by_code(household_id, code)
+            if category is None:
+                return None
+            return await repository.delete_if_unused(category)
 
     async def statistics(
         self, *, household_id: int, start_date: date, end_date: date

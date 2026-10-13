@@ -31,7 +31,9 @@ from bot.keyboards import (
     cancel_category_edit_keyboard,
     category_detail_keyboard,
     category_list_keyboard,
+    category_templates_keyboard,
     category_types_keyboard,
+    confirm_category_delete_keyboard,
     main_menu_keyboard,
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
@@ -254,10 +256,44 @@ async def category_menu_callback(
         )
         await _edit(
             callback,
-            title,
+            (
+                title
+                if categories
+                else f"{title}\n\nУ цьому чаті ще немає таких категорій. "
+                "Створіть власну або виберіть потрібну із шаблонів."
+            ),
             reply_markup=category_list_keyboard(
                 categories, transaction_type=transaction_type.value
             ),
+        )
+        return
+    if action == "templates":
+        transaction_type = TransactionType(value)
+        templates = await category_service.list_templates(
+            household_id=household.id, transaction_type=transaction_type
+        )
+        title = (
+            "Шаблони категорій витрат"
+            if transaction_type is TransactionType.EXPENSE
+            else "Шаблони категорій доходів"
+        )
+        await _edit(
+            callback,
+            title if templates else f"{title}\n\nУсі доступні шаблони вже додано.",
+            reply_markup=category_templates_keyboard(
+                templates, transaction_type=transaction_type.value
+            ),
+        )
+        return
+    if action == "add_template":
+        category = await category_service.add_template(household_id=household.id, code=value)
+        if category is None:
+            await callback.answer("Шаблон недоступний або вже доданий.", show_alert=True)
+            return
+        await _edit(
+            callback,
+            f"Категорію додано: {category.name}",
+            reply_markup=category_detail_keyboard(category),
         )
         return
     if action == "view":
@@ -299,6 +335,44 @@ async def category_menu_callback(
             callback,
             f"{category.name}\nСтатус: {'активна' if category.is_active else 'прихована'}",
             reply_markup=category_detail_keyboard(category),
+        )
+        return
+    if action == "delete_prompt":
+        category = await _effective_category(category_service, household.id, value)
+        if category is None:
+            await callback.answer("Категорію не знайдено.", show_alert=True)
+            return
+        await _edit(
+            callback,
+            f"Видалити категорію «{category.name}»?\n\n"
+            "Якщо вона вже використовується, бот збереже її та запропонує приховати.",
+            reply_markup=confirm_category_delete_keyboard(category),
+        )
+        return
+    if action == "delete":
+        category = await _effective_category(category_service, household.id, value)
+        if category is None:
+            await callback.answer("Категорію не знайдено.", show_alert=True)
+            return
+        result = await category_service.delete_unused(household_id=household.id, code=value)
+        if result is False:
+            await _edit(
+                callback,
+                f"Категорія «{category.name}» уже використовується, тому її не видалено. "
+                "Її можна приховати — історія та статистика залишаться коректними.",
+                reply_markup=category_detail_keyboard(category),
+            )
+            return
+        if result is None:
+            await callback.answer("Категорію не знайдено.", show_alert=True)
+            return
+        categories = tuple(
+            item for item in await category_service.list(household.id) if item.type is category.type
+        )
+        await _edit(
+            callback,
+            f"Категорію «{category.name}» видалено.",
+            reply_markup=category_list_keyboard(categories, transaction_type=category.type.value),
         )
         return
     await callback.answer("Невідома дія.", show_alert=True)

@@ -354,6 +354,14 @@ class CategoryRepository:
     async def get(self, category_id: int) -> Category | None:
         return await self.session.get(Category, category_id)
 
+    async def get_for_household(self, household_id: int, category_id: int) -> Category | None:
+        return await self.session.scalar(
+            select(Category).where(
+                Category.id == category_id,
+                Category.household_id == household_id,
+            )
+        )
+
     async def list_available(
         self, household_id: int, *, transaction_type: TransactionType | None = None
     ) -> list[Category]:
@@ -366,14 +374,9 @@ class CategoryRepository:
         ]
 
     async def list_for_management(self, household_id: int) -> list[Category]:
-        statement = select(Category).where(
-            Category.household_id.is_(None) | (Category.household_id == household_id)
-        )
+        statement = select(Category).where(Category.household_id == household_id)
         categories = list(await self.session.scalars(statement))
-        effective: dict[str, Category] = {}
-        for category in sorted(categories, key=lambda item: item.household_id is not None):
-            effective[category.code] = category
-        return sorted(effective.values(), key=lambda item: (item.type.value, item.name.casefold()))
+        return sorted(categories, key=lambda item: (item.type.value, item.name.casefold()))
 
     async def get_effective_by_code(self, household_id: int, code: str) -> Category | None:
         categories = await self.list_for_management(household_id)
@@ -397,21 +400,34 @@ class CategoryRepository:
         await self.session.flush()
         return category
 
+    async def create_if_absent(
+        self,
+        *,
+        household_id: int,
+        code: str,
+        name: str,
+        transaction_type: TransactionType,
+    ) -> Category | None:
+        statement = (
+            insert(Category)
+            .values(
+                household_id=household_id,
+                code=code,
+                name=name,
+                type=transaction_type,
+                is_active=True,
+            )
+            .on_conflict_do_nothing(index_elements=[Category.household_id, Category.code])
+            .returning(Category.id)
+        )
+        category_id = await self.session.scalar(statement)
+        return await self.get(category_id) if category_id is not None else None
+
     async def rename_effective(self, *, household_id: int, code: str, name: str) -> Category | None:
         category = await self.get_effective_by_code(household_id, code)
         if category is None:
             return None
-        if category.household_id == household_id:
-            category.name = name
-        else:
-            category = Category(
-                household_id=household_id,
-                code=category.code,
-                name=name,
-                type=category.type,
-                is_active=category.is_active,
-            )
-            self.session.add(category)
+        category.name = name
         await self.session.flush()
         return category
 
@@ -421,19 +437,24 @@ class CategoryRepository:
         category = await self.get_effective_by_code(household_id, code)
         if category is None:
             return None
-        if category.household_id == household_id:
-            category.is_active = is_active
-        else:
-            category = Category(
-                household_id=household_id,
-                code=category.code,
-                name=category.name,
-                type=category.type,
-                is_active=is_active,
-            )
-            self.session.add(category)
+        category.is_active = is_active
         await self.session.flush()
         return category
+
+    async def delete_if_unused(self, category: Category) -> bool:
+        statement = (
+            delete(Category)
+            .where(
+                Category.id == category.id,
+                ~select(Transaction.id).where(Transaction.category_id == category.id).exists(),
+                ~select(PlannedExpense.id)
+                .where(PlannedExpense.category_id == category.id)
+                .exists(),
+                ~select(Budget.id).where(Budget.category_id == category.id).exists(),
+            )
+            .returning(Category.id)
+        )
+        return await self.session.scalar(statement) is not None
 
 
 class TransactionRepository:
@@ -480,7 +501,7 @@ class TransactionRepository:
     async def assign_category(
         self, *, transaction: Transaction, category: Category
     ) -> Transaction:
-        if category.household_id not in (None, transaction.household_id):
+        if category.household_id != transaction.household_id:
             raise InvalidTransactionReferenceError("Category is not available to household")
         if category.type is not transaction.type:
             raise InvalidTransactionReferenceError("Category type does not match transaction type")
@@ -712,7 +733,7 @@ class TransactionRepository:
             raise InvalidTransactionReferenceError("Member does not belong to household")
         if beneficiary is None or beneficiary.household_id != household_id:
             raise InvalidTransactionReferenceError("Beneficiary does not belong to household")
-        if category is None or category.household_id not in (None, household_id):
+        if category is None or category.household_id != household_id:
             raise InvalidTransactionReferenceError("Category is not available to household")
         if category.type != transaction_type:
             raise InvalidTransactionReferenceError("Category type does not match transaction type")

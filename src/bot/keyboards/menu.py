@@ -4,6 +4,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.keyboards.transactions import planned_expenses_keyboard
+from domain.category_templates import CategoryTemplate
 from infrastructure.database import Category, PlannedExpense
 
 
@@ -135,6 +136,14 @@ def category_list_keyboard(
             ],
             [
                 InlineKeyboardButton(
+                    text="📚 Додати із шаблонів",
+                    callback_data=CategoryMenuCallback(
+                        action="templates", value=transaction_type
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="← Назад",
                     callback_data=MenuCallback(section="categories").pack(),
                 )
@@ -162,10 +171,62 @@ def category_detail_keyboard(category: Category) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="🗑 Видалити",
+                    callback_data=CategoryMenuCallback(
+                        action="delete_prompt", value=category.code
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="← До категорій",
                     callback_data=CategoryMenuCallback(
                         action="list", value=category.type.value
                     ).pack(),
+                )
+            ],
+        ]
+    )
+
+
+def category_templates_keyboard(
+    templates: Iterable[CategoryTemplate], *, transaction_type: str
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"➕ {template.name}",
+                callback_data=CategoryMenuCallback(
+                    action="add_template", value=template.code
+                ).pack(),
+            )
+        ]
+        for template in templates
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← До категорій",
+                callback_data=CategoryMenuCallback(action="list", value=transaction_type).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def confirm_category_delete_keyboard(category: Category) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Так, видалити",
+                    callback_data=CategoryMenuCallback(action="delete", value=category.code).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="← Скасувати",
+                    callback_data=CategoryMenuCallback(action="view", value=category.code).pack(),
                 )
             ],
         ]
@@ -205,6 +266,8 @@ __all__ = [
     "cancel_category_edit_keyboard",
     "category_detail_keyboard",
     "category_list_keyboard",
+    "category_templates_keyboard",
+    "confirm_category_delete_keyboard",
     "category_types_keyboard",
     "main_menu_keyboard",
     "month_selection_keyboard",

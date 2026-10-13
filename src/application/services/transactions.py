@@ -121,8 +121,15 @@ class TransactionService:
             transaction = await repository.get_for_household(
                 household_id=household_id, transaction_id=transaction_id
             )
-            category: Category | None = await CategoryRepository(session).get(category_id)
-            if transaction is None or category is None:
+            category: Category | None = await CategoryRepository(session).get_for_household(
+                household_id, category_id
+            )
+            if (
+                transaction is None
+                or category is None
+                or not category.is_active
+                or category.type is not transaction.type
+            ):
                 return None
             return await repository.assign_category(transaction=transaction, category=category)
 
