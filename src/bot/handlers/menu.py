@@ -34,6 +34,7 @@ from bot.keyboards import (
     category_templates_keyboard,
     category_types_keyboard,
     confirm_category_delete_keyboard,
+    currency_keyboard,
     main_menu_keyboard,
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
@@ -225,7 +226,9 @@ async def menu_callback(
         await _edit(
             callback,
             _settings_text(household),
-            reply_markup=settings_keyboard(reports_enabled=household.reports_enabled),
+            reply_markup=settings_keyboard(
+                reports_enabled=household.reports_enabled, currency=household.currency
+            ),
         )
         return
     await callback.answer("Невідомий розділ.", show_alert=True)
@@ -397,7 +400,9 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(household),
-            reply_markup=settings_keyboard(reports_enabled=household.reports_enabled),
+            reply_markup=settings_keyboard(
+                reports_enabled=household.reports_enabled, currency=household.currency
+            ),
         )
         return
     if callback_data.action == "reports":
@@ -405,7 +410,34 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(updated),
-            reply_markup=settings_keyboard(reports_enabled=updated.reports_enabled),
+            reply_markup=settings_keyboard(
+                reports_enabled=updated.reports_enabled, currency=updated.currency
+            ),
+        )
+        return
+    if callback_data.action == "currency" and callback_data.value == "menu":
+        await _edit(
+            callback,
+            "Оберіть основну валюту.\n\n"
+            "Вона застосовуватиметься до нових операцій і звітів. "
+            "Старі операції не конвертуються і не ввійдуть у звіти нової валюти.",
+            reply_markup=currency_keyboard(current_currency=household.currency),
+        )
+        return
+    if callback_data.action == "currency":
+        try:
+            updated = await household_settings_service.set_currency(
+                household_id=household.id, currency=callback_data.value
+            )
+        except ValueError:
+            await callback.answer("Непідтримувана валюта.", show_alert=True)
+            return
+        await _edit(
+            callback,
+            f"Основну валюту змінено на {updated.currency}.\n\n{_settings_text(updated)}",
+            reply_markup=settings_keyboard(
+                reports_enabled=updated.reports_enabled, currency=updated.currency
+            ),
         )
         return
     if callback_data.action == "timezone" and callback_data.value == "menu":
@@ -418,7 +450,9 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(updated),
-            reply_markup=settings_keyboard(reports_enabled=updated.reports_enabled),
+            reply_markup=settings_keyboard(
+                reports_enabled=updated.reports_enabled, currency=updated.currency
+            ),
         )
         return
     await callback.answer("Невідома дія.", show_alert=True)

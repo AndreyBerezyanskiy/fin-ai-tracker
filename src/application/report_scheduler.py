@@ -10,6 +10,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from application.services.automatic_reports import AutomaticReportService, ReportSender
 from application.services.planned_expenses import PlannedExpenseService, ReminderCandidate
 from bot.keyboards import planned_expenses_keyboard
+from domain.currencies import currency_prefix
 from domain.enums import ReminderKind
 from infrastructure.observability import pseudonymize
 
@@ -103,13 +104,12 @@ class ReportScheduler:
             ReminderKind.DUE: "⏰ Запланована оплата сьогодні",
             ReminderKind.OVERDUE: "⚠️ Запланована оплата прострочена",
         }[reminder.kind]
-        prefix = "€" if plan.currency == "EUR" else f"{plan.currency} "
         return "\n".join(
             [
                 title,
                 "",
                 plan.description,
-                f"💶 {prefix}{plan.amount:.2f}",
+                f"💶 {currency_prefix(plan.currency)}{plan.amount:.2f}",
                 f"🏷️ {plan.category.name}",
                 f"📅 {plan.due_date:%d.%m.%Y}",
                 "",

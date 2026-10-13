@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from application.services.advice import AdviceService
 from application.services.budgets import BudgetService, BudgetStatus
 from application.services.telegram import ReportService
+from domain.currencies import currency_prefix
 from domain.enums import ReportType
 from infrastructure.database import Household, session_scope
 from infrastructure.observability import pseudonymize
@@ -245,8 +246,7 @@ class AutomaticReportService:
 
     @staticmethod
     def _money(value: Decimal, currency: str) -> str:
-        prefix = "€" if currency == "EUR" else f"{currency} "
-        return f"{prefix}{value:.2f}"
+        return f"{currency_prefix(currency)}{value:.2f}"
 
     @classmethod
     def _signed_money(cls, value: Decimal, currency: str) -> str:

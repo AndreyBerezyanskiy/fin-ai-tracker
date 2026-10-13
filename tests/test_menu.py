@@ -16,6 +16,7 @@ from bot.keyboards import (
     CategoryMenuCallback,
     MenuCallback,
     SettingsMenuCallback,
+    currency_keyboard,
     main_menu_keyboard,
 )
 from domain.category_templates import CategoryTemplate
@@ -45,6 +46,19 @@ def test_admin_main_menu_contains_access_management() -> None:
     ]
 
     assert "👥 Керування доступом" in labels
+
+
+def test_currency_keyboard_lists_supported_currencies_and_marks_current() -> None:
+    labels = [
+        button.text
+        for row in currency_keyboard(current_currency="UAH").inline_keyboard
+        for button in row
+    ]
+
+    assert "€ Євро" in labels
+    assert "✅ ₴ Гривня" in labels
+    assert "$ Долар США" in labels
+    assert len(labels) == 4  # Three currencies and the back button.
 
 
 @pytest.mark.asyncio
@@ -352,3 +366,85 @@ async def test_settings_callback_toggles_reports() -> None:
 
     service.toggle_reports.assert_awaited_once_with(1)
     assert "Автоматичні звіти: вимкнені" in callback.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_opens_currency_menu() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+    )
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="currency", value="menu"),
+        household,
+        SimpleNamespace(),
+    )
+
+    text = callback.message.edit_text.await_args.args[0]
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert "Старі операції не конвертуються" in text
+    assert "✅ € Євро" in labels
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_changes_currency() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+        reports_enabled=True,
+    )
+    updated = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="UAH",
+        timezone="Europe/Paris",
+        reports_enabled=True,
+    )
+    service = SimpleNamespace(set_currency=AsyncMock(return_value=updated))
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="currency", value="UAH"),
+        household,
+        service,
+    )
+
+    service.set_currency.assert_awaited_once_with(household_id=1, currency="UAH")
+    assert "Основну валюту змінено на UAH" in callback.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_rejects_forged_currency() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR")
+    service = SimpleNamespace(set_currency=AsyncMock(side_effect=ValueError))
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="currency", value="BAD"),
+        household,
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with("Непідтримувана валюта.", show_alert=True)
+    callback.message.edit_text.assert_not_awaited()

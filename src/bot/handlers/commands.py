@@ -44,9 +44,11 @@ from bot.keyboards import (
     planned_expense_edit_cancel_keyboard,
     planned_expense_edit_keyboard,
     planned_expenses_keyboard,
+    settings_keyboard,
     transaction_category_keyboard,
     uncategorized_transactions_keyboard,
 )
+from domain.currencies import currency_prefix
 from domain.enums import (
     PlannedExpenseRecurrence,
     PlannedExpenseStatus,
@@ -477,7 +479,10 @@ async def settings_command(message: Message, household: Household) -> None:
         "Налаштування групи\n"
         f"Валюта: {household.currency}\n"
         f"Часовий пояс: {household.timezone}\n"
-        f"Автоматичні звіти: {reports}"
+        f"Автоматичні звіти: {reports}",
+        reply_markup=settings_keyboard(
+            reports_enabled=household.reports_enabled, currency=household.currency
+        ),
     )
 
 
@@ -486,7 +491,7 @@ def _amount_prefix(transaction_type: TransactionType) -> str:
 
 
 def _currency_prefix(currency: str) -> str:
-    return "€" if currency == "EUR" else f"{currency} "
+    return currency_prefix(currency)
 
 
 def _format_transaction_line(transaction: object) -> str:

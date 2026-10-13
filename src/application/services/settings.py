@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from domain.currencies import SUPPORTED_CURRENCIES
 from infrastructure.database import Household, session_scope
 from infrastructure.repositories import HouseholdRepository
 
@@ -37,6 +38,18 @@ class HouseholdSettingsService:
             if household is None:
                 raise ValueError("household not found")
             household.timezone = timezone
+            await session.flush()
+            return household
+
+    async def set_currency(self, *, household_id: int, currency: str) -> Household:
+        normalized = currency.strip().upper()
+        if normalized not in SUPPORTED_CURRENCIES:
+            raise ValueError("unsupported currency")
+        async with session_scope(self.session_factory) as session:
+            household = await HouseholdRepository(session).get(household_id)
+            if household is None:
+                raise ValueError("household not found")
+            household.currency = normalized
             await session.flush()
             return household
 

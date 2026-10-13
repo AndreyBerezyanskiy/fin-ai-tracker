@@ -6,6 +6,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.keyboards.access import access_menu_button
 from bot.keyboards.transactions import planned_expenses_keyboard
 from domain.category_templates import CategoryTemplate
+from domain.currencies import CURRENCY_LABELS
 from infrastructure.database import Category, PlannedExpense
 
 
@@ -56,9 +57,15 @@ def month_selection_keyboard(months: Iterable[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard(*, reports_enabled: bool) -> InlineKeyboardMarkup:
+def settings_keyboard(*, reports_enabled: bool, currency: str = "EUR") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"💱 Валюта: {currency}",
+                    callback_data=SettingsMenuCallback(action="currency", value="menu").pack(),
+                )
+            ],
             [
                 InlineKeyboardButton(
                     text=("🔕 Вимкнути звіти" if reports_enabled else "🔔 Увімкнути звіти"),
@@ -74,6 +81,27 @@ def settings_keyboard(*, reports_enabled: bool) -> InlineKeyboardMarkup:
             [_menu_button("← Назад", "home")],
         ]
     )
+
+
+def currency_keyboard(*, current_currency: str) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅ ' if code == current_currency else ''}{label}",
+                callback_data=SettingsMenuCallback(action="currency", value=code).pack(),
+            )
+        ]
+        for code, label in CURRENCY_LABELS.items()
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← Назад",
+                callback_data=SettingsMenuCallback(action="back", value="settings").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def timezone_keyboard() -> InlineKeyboardMarkup:
@@ -270,6 +298,7 @@ __all__ = [
     "category_list_keyboard",
     "category_templates_keyboard",
     "confirm_category_delete_keyboard",
+    "currency_keyboard",
     "category_types_keyboard",
     "main_menu_keyboard",
     "month_selection_keyboard",

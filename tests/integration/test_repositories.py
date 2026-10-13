@@ -166,6 +166,24 @@ async def test_household_and_member_are_created_idempotently(session: AsyncSessi
 
 
 @pytest.mark.asyncio
+async def test_household_currency_can_be_changed(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100998, name="Currency settings"
+        )
+        household_id = household.id
+
+    service = HouseholdSettingsService(service_session_factory)
+    updated = await service.set_currency(household_id=household_id, currency="uah")
+
+    assert updated.currency == "UAH"
+    with pytest.raises(ValueError, match="unsupported currency"):
+        await service.set_currency(household_id=household_id, currency="BTC")
+
+
+@pytest.mark.asyncio
 async def test_new_household_starts_without_categories(
     session: AsyncSession,
 ) -> None:
