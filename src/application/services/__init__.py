@@ -1,5 +1,6 @@
 """Application services."""
 
+from application.services.access import AccessService, InvitationLink, RedemptionResult
 from application.services.advice import AdviceCategory, AdviceReport, AdviceService
 from application.services.automatic_reports import AutomaticReportService
 from application.services.budgets import BudgetService, BudgetStatus, CategoryBudgetStatus
@@ -19,6 +20,7 @@ from application.services.telegram import (
 from application.services.transactions import BatchTransitionResult, TransactionService
 
 __all__ = [
+    "AccessService",
     "AdviceCategory",
     "AdviceReport",
     "AdviceService",
@@ -39,6 +41,8 @@ __all__ = [
     "CategoryStatistic",
     "ClarificationService",
     "HouseholdSettingsService",
+    "InvitationLink",
+    "RedemptionResult",
     "TransactionService",
     "TransactionRecognitionService",
 ]

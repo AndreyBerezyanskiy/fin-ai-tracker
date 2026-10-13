@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from bot.keyboards.access import access_menu_button
 from bot.keyboards.transactions import planned_expenses_keyboard
 from domain.category_templates import CategoryTemplate
 from infrastructure.database import Category, PlannedExpense
@@ -26,16 +27,17 @@ def _menu_button(text: str, section: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=MenuCallback(section=section).pack())
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def main_menu_keyboard(*, is_access_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
             [_menu_button("🧾 Останні операції", "last"), _menu_button("📊 Статистика", "stats")],
             [_menu_button("📌 Заплановані витрати", "planned")],
             [_menu_button("🗂 Без категорії", "uncategorized")],
             [_menu_button("🏷 Категорії", "categories"), _menu_button("⚙️ Налаштування", "settings")],
             [_menu_button("↩️ Скасувати останню", "undo")],
         ]
-    )
+    if is_access_admin:
+        rows.append([access_menu_button()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def stats_menu_keyboard() -> InlineKeyboardMarkup:

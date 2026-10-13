@@ -18,6 +18,9 @@ from domain.enums import (
     TransactionType,
 )
 from infrastructure.database.models import (
+    AccessGrant,
+    AccessInvitation,
+    AccessRequest,
     Budget,
     Category,
     Household,
@@ -47,6 +50,150 @@ class CategoryTotal:
     code: str
     type: TransactionType
     amount: Decimal
+
+
+class AccessRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def is_allowed(self, telegram_chat_id: int) -> bool:
+        return (
+            await self.session.scalar(
+                select(AccessGrant.id).where(
+                    AccessGrant.telegram_chat_id == telegram_chat_id,
+                    AccessGrant.is_active.is_(True),
+                )
+            )
+            is not None
+        )
+
+    async def grant(
+        self,
+        *,
+        telegram_chat_id: int,
+        chat_type: str,
+        title: str,
+        username: str | None,
+        granted_by_user_id: int,
+    ) -> AccessGrant:
+        statement = (
+            insert(AccessGrant)
+            .values(
+                telegram_chat_id=telegram_chat_id,
+                chat_type=chat_type,
+                title=title,
+                username=username,
+                granted_by_user_id=granted_by_user_id,
+                is_active=True,
+            )
+            .on_conflict_do_update(
+                index_elements=[AccessGrant.telegram_chat_id],
+                set_={
+                    "chat_type": chat_type,
+                    "title": title,
+                    "username": username,
+                    "granted_by_user_id": granted_by_user_id,
+                    "is_active": True,
+                    "updated_at": func.now(),
+                },
+            )
+            .returning(AccessGrant)
+        )
+        return (await self.session.scalars(statement)).one()
+
+    async def list_active_grants(self) -> list[AccessGrant]:
+        return list(
+            await self.session.scalars(
+                select(AccessGrant)
+                .where(AccessGrant.is_active.is_(True))
+                .order_by(AccessGrant.title, AccessGrant.id)
+            )
+        )
+
+    async def revoke(self, telegram_chat_id: int) -> AccessGrant | None:
+        grant = await self.session.scalar(
+            select(AccessGrant).where(AccessGrant.telegram_chat_id == telegram_chat_id)
+        )
+        if grant is None or not grant.is_active:
+            return None
+        grant.is_active = False
+        await self.session.flush()
+        return grant
+
+    async def create_invitation(
+        self,
+        *,
+        token_digest: str,
+        target_type: str,
+        created_by_user_id: int,
+        expires_at: datetime,
+    ) -> AccessInvitation:
+        invitation = AccessInvitation(
+            token_digest=token_digest,
+            target_type=target_type,
+            created_by_user_id=created_by_user_id,
+            expires_at=expires_at,
+        )
+        self.session.add(invitation)
+        await self.session.flush()
+        return invitation
+
+    async def get_invitation_for_update(self, token_digest: str) -> AccessInvitation | None:
+        return await self.session.scalar(
+            select(AccessInvitation)
+            .where(AccessInvitation.token_digest == token_digest)
+            .with_for_update()
+        )
+
+    async def request_access(
+        self,
+        *,
+        telegram_chat_id: int,
+        requester_user_id: int,
+        chat_type: str,
+        title: str,
+        username: str | None,
+    ) -> AccessRequest:
+        statement = (
+            insert(AccessRequest)
+            .values(
+                telegram_chat_id=telegram_chat_id,
+                requester_user_id=requester_user_id,
+                chat_type=chat_type,
+                title=title,
+                username=username,
+                status="pending",
+                reviewed_by_user_id=None,
+            )
+            .on_conflict_do_update(
+                index_elements=[AccessRequest.telegram_chat_id],
+                set_={
+                    "requester_user_id": requester_user_id,
+                    "chat_type": chat_type,
+                    "title": title,
+                    "username": username,
+                    "status": "pending",
+                    "reviewed_by_user_id": None,
+                    "updated_at": func.now(),
+                },
+            )
+            .returning(AccessRequest)
+        )
+        return (await self.session.scalars(statement)).one()
+
+    async def list_pending_requests(self) -> list[AccessRequest]:
+        return list(
+            await self.session.scalars(
+                select(AccessRequest)
+                .where(AccessRequest.status == "pending")
+                .order_by(AccessRequest.created_at, AccessRequest.id)
+            )
+        )
+
+    async def get_request_for_update(self, request_id: int) -> AccessRequest | None:
+        return await self.session.scalar(
+            select(AccessRequest).where(AccessRequest.id == request_id).with_for_update()
+        )
 
 
 class HouseholdRepository:

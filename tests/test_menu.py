@@ -37,6 +37,16 @@ def test_main_menu_contains_primary_sections() -> None:
     ]
 
 
+def test_admin_main_menu_contains_access_management() -> None:
+    labels = [
+        button.text
+        for row in main_menu_keyboard(is_access_admin=True).inline_keyboard
+        for button in row
+    ]
+
+    assert "👥 Керування доступом" in labels
+
+
 @pytest.mark.asyncio
 async def test_planned_expenses_are_available_from_main_menu() -> None:
     callback = SimpleNamespace(

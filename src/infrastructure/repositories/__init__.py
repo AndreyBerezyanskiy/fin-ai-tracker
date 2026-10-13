@@ -1,6 +1,7 @@
 """Repository implementations."""
 
 from infrastructure.repositories.repositories import (
+    AccessRepository,
     BudgetRepository,
     CategoryRepository,
     CategoryTotal,
@@ -17,6 +18,7 @@ from infrastructure.repositories.repositories import (
 )
 
 __all__ = [
+    "AccessRepository",
     "BudgetRepository",
     "CategoryTotal",
     "CategoryRepository",

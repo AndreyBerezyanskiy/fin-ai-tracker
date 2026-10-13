@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, PositiveFloat, PositiveInt, SecretStr, field_validator
+from pydantic import Field, PositiveFloat, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 type AppEnvironment = Literal["development", "test", "production"]
@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = Field(min_length=1)
     openai_api_key: SecretStr = Field(min_length=1)
     database_url: SecretStr = Field(min_length=1)
-    allowed_chat_ids_raw: str = Field(alias="ALLOWED_CHAT_IDS")
+    allowed_chat_ids_raw: str = Field(default="", alias="ALLOWED_CHAT_IDS")
+    admin_user_ids_raw: str = Field(default="", alias="ADMIN_USER_IDS")
     openai_model: str = "gpt-6-luna"
     app_env: AppEnvironment = "development"
     log_level: str = "INFO"
@@ -41,13 +42,28 @@ class Settings(BaseSettings):
     @classmethod
     def validate_allowed_chat_ids(cls, value: str) -> str:
         entries = [entry.strip() for entry in value.split(",") if entry.strip()]
-        if not entries:
-            raise ValueError("ALLOWED_CHAT_IDS must contain at least one Telegram chat ID")
         try:
             for entry in entries:
                 int(entry)
         except ValueError as error:
             raise ValueError("ALLOWED_CHAT_IDS must contain comma-separated integers") from error
+        return value
+
+    @model_validator(mode="after")
+    def validate_access_bootstrap(self) -> Settings:
+        if not self.allowed_chat_ids and not self.admin_user_ids:
+            raise ValueError("ALLOWED_CHAT_IDS or ADMIN_USER_IDS must contain at least one ID")
+        return self
+
+    @field_validator("admin_user_ids_raw")
+    @classmethod
+    def validate_admin_user_ids(cls, value: str) -> str:
+        try:
+            for entry in value.split(","):
+                if entry.strip():
+                    int(entry.strip())
+        except ValueError as error:
+            raise ValueError("ADMIN_USER_IDS must contain comma-separated integers") from error
         return value
 
     @field_validator("log_level")
@@ -70,6 +86,12 @@ class Settings(BaseSettings):
     def allowed_chat_ids(self) -> frozenset[int]:
         return frozenset(
             int(entry.strip()) for entry in self.allowed_chat_ids_raw.split(",") if entry.strip()
+        )
+
+    @property
+    def admin_user_ids(self) -> frozenset[int]:
+        return frozenset(
+            int(entry.strip()) for entry in self.admin_user_ids_raw.split(",") if entry.strip()
         )
 
     @property

@@ -39,7 +39,6 @@ from bot.keyboards import (
     budget_status_keyboard,
     category_choice_keyboard,
     clarification_keyboard,
-    main_menu_keyboard,
     pending_transactions_keyboard,
     planned_expense_confirmation_keyboard,
     planned_expense_edit_cancel_keyboard,
@@ -163,13 +162,6 @@ async def _answer_statistics_query(
 
 def _today(household: Household) -> date:
     return datetime.now(ZoneInfo(household.timezone)).date()
-
-
-async def start_command(message: Message, household: Household) -> None:
-    await message.answer(
-        f"Групу «{household.name}» підключено до сімейного бюджету.\n\n{HELP_TEXT}",
-        reply_markup=main_menu_keyboard(),
-    )
 
 
 async def help_command(message: Message) -> None:
@@ -1901,7 +1893,6 @@ async def handle_error(event: ErrorEvent) -> bool:
 
 def create_commands_router() -> Router:
     router = Router(name="commands")
-    router.message.register(start_command, Command("start"))
     router.message.register(help_command, Command("help"))
     router.message.register(today_command, Command("today"))
     router.message.register(month_command, Command("month"))

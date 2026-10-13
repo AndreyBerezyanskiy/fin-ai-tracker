@@ -8,7 +8,7 @@ from aiogram import BaseMiddleware
 from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 
-from application.services import TelegramBootstrapService
+from application.services import AccessService, TelegramBootstrapService
 from infrastructure.observability import pseudonymize
 
 logger = logging.getLogger(__name__)
@@ -46,9 +46,13 @@ class AllowedMessageMiddleware(BaseMiddleware):
         *,
         allowed_chat_ids: frozenset[int],
         bootstrap_service: TelegramBootstrapService,
+        access_service: AccessService | None = None,
+        admin_user_ids: frozenset[int] = frozenset(),
     ) -> None:
         self.allowed_chat_ids = allowed_chat_ids
         self.bootstrap_service = bootstrap_service
+        self.access_service = access_service
+        self.admin_user_ids = admin_user_ids
 
     async def __call__(
         self,
@@ -58,15 +62,29 @@ class AllowedMessageMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, Message):
             return None
-        if event.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        if event.chat.type not in {ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP}:
             return None
-        if event.chat.id not in self.allowed_chat_ids:
+        if event.from_user is None or event.from_user.is_bot:
+            return None
+        is_admin = event.from_user.id in self.admin_user_ids
+        is_allowed = (
+            event.chat.id in self.allowed_chat_ids
+            or (is_admin and event.chat.type == ChatType.PRIVATE)
+            or (
+                self.access_service is not None
+                and await self.access_service.is_allowed(event.chat.id)
+            )
+        )
+        data["is_access_admin"] = is_admin and event.chat.type == ChatType.PRIVATE
+        if not is_allowed:
             logger.warning(
                 "telegram_chat_not_allowed",
                 extra={"event_data": {"chat_ref": pseudonymize(event.chat.id)}},
             )
-            return None
-        if event.from_user is None or event.from_user.is_bot:
+            command = (event.text or "").split(maxsplit=1)[0].split("@", maxsplit=1)[0]
+            if command == "/start":
+                data["access_bootstrap"] = True
+                return await handler(event, data)
             return None
 
         update: Update = data["event_update"]
@@ -99,9 +117,13 @@ class AllowedCallbackQueryMiddleware(BaseMiddleware):
         *,
         allowed_chat_ids: frozenset[int],
         bootstrap_service: TelegramBootstrapService,
+        access_service: AccessService | None = None,
+        admin_user_ids: frozenset[int] = frozenset(),
     ) -> None:
         self.allowed_chat_ids = allowed_chat_ids
         self.bootstrap_service = bootstrap_service
+        self.access_service = access_service
+        self.admin_user_ids = admin_user_ids
 
     async def __call__(
         self,
@@ -112,9 +134,16 @@ class AllowedCallbackQueryMiddleware(BaseMiddleware):
         if not isinstance(event, CallbackQuery) or not isinstance(event.message, Message):
             return None
         chat = event.message.chat
-        if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        if chat.type not in {ChatType.PRIVATE, ChatType.GROUP, ChatType.SUPERGROUP}:
             return None
-        if chat.id not in self.allowed_chat_ids:
+        is_admin = event.from_user.id in self.admin_user_ids
+        is_allowed = (
+            chat.id in self.allowed_chat_ids
+            or (is_admin and chat.type == ChatType.PRIVATE)
+            or (self.access_service is not None and await self.access_service.is_allowed(chat.id))
+        )
+        data["is_access_admin"] = is_admin and chat.type == ChatType.PRIVATE
+        if not is_allowed:
             logger.warning(
                 "telegram_chat_not_allowed",
                 extra={"event_data": {"chat_ref": pseudonymize(chat.id)}},

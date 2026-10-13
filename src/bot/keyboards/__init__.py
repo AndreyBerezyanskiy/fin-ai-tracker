@@ -1,5 +1,11 @@
 """Telegram keyboard builders."""
 
+from bot.keyboards.access import (
+    AccessCallback,
+    access_management_keyboard,
+    access_menu_button,
+    access_request_keyboard,
+)
 from bot.keyboards.menu import (
     CategoryMenuCallback,
     MenuCallback,
@@ -38,6 +44,7 @@ from bot.keyboards.transactions import (
 )
 
 __all__ = [
+    "AccessCallback",
     "CategoryMenuCallback",
     "MenuCallback",
     "SettingsMenuCallback",
@@ -51,6 +58,9 @@ __all__ = [
     "budget_status_keyboard",
     "category_choice_keyboard",
     "back_to_main_keyboard",
+    "access_management_keyboard",
+    "access_menu_button",
+    "access_request_keyboard",
     "cancel_category_edit_keyboard",
     "category_detail_keyboard",
     "category_list_keyboard",

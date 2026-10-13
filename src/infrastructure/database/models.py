@@ -184,6 +184,47 @@ class ProcessedTelegramUpdate(Base):
     update_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
 
 
+class AccessGrant(TimestampMixin, Base):
+    __tablename__ = "access_grants"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    chat_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    granted_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+
+
+class AccessInvitation(TimestampMixin, Base):
+    __tablename__ = "access_invitations"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class AccessRequest(TimestampMixin, Base):
+    __tablename__ = "access_requests"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    requester_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chat_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (Index("uq_categories_household_code", "household_id", "code", unique=True),)
@@ -388,6 +429,9 @@ class Budget(TimestampMixin, Base):
 
 
 __all__ = [
+    "AccessGrant",
+    "AccessInvitation",
+    "AccessRequest",
     "Budget",
     "Category",
     "Household",

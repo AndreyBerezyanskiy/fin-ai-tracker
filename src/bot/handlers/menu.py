@@ -51,9 +51,13 @@ class CategoryEditStates(StatesGroup):
     rename_name = State()
 
 
-async def menu_command(message: Message, state: FSMContext) -> None:
+async def menu_command(
+    message: Message, state: FSMContext, is_access_admin: bool = False
+) -> None:
     await state.clear()
-    await message.answer("Головне меню", reply_markup=main_menu_keyboard())
+    await message.answer(
+        "Головне меню", reply_markup=main_menu_keyboard(is_access_admin=is_access_admin)
+    )
 
 
 async def _edit(callback: CallbackQuery, text: str, *, reply_markup: object) -> None:
@@ -114,11 +118,16 @@ async def menu_callback(
     category_service: CategoryService,
     state: FSMContext,
     planned_expense_service: PlannedExpenseService | None = None,
+    is_access_admin: bool = False,
 ) -> None:
     section = callback_data.section
     if section == "home":
         await state.clear()
-        await _edit(callback, "Головне меню", reply_markup=main_menu_keyboard())
+        await _edit(
+            callback,
+            "Головне меню",
+            reply_markup=main_menu_keyboard(is_access_admin=is_access_admin),
+        )
         return
     if section == "stats":
         await _edit(callback, "Оберіть період статистики", reply_markup=stats_menu_keyboard())

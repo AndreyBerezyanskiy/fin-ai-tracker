@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from application.rate_limit import AIRateLimiter
 from application.report_scheduler import ReportScheduler
 from application.services import (
+    AccessService,
     AdviceService,
     AutomaticReportService,
     BudgetService,
@@ -23,7 +24,12 @@ from application.services import (
     TransactionRecognitionService,
     TransactionService,
 )
-from bot.handlers import create_commands_router, create_menu_router, handle_error
+from bot.handlers import (
+    create_access_router,
+    create_commands_router,
+    create_menu_router,
+    handle_error,
+)
 from bot.middlewares import (
     AllowedCallbackQueryMiddleware,
     AllowedMessageMiddleware,
@@ -46,6 +52,7 @@ def create_dispatcher(
     """Create the dispatcher and optionally attach database-backed dependencies."""
 
     dispatcher = Dispatcher()
+    dispatcher.include_router(create_access_router())
     dispatcher.include_router(create_menu_router())
     dispatcher.include_router(create_commands_router())
     dispatcher.startup.register(set_bot_commands)
@@ -54,18 +61,26 @@ def create_dispatcher(
 
     if settings is not None and session_factory is not None:
         bootstrap_service = TelegramBootstrapService(session_factory)
+        access_service = AccessService(session_factory)
         dispatcher.message.outer_middleware(
             AllowedMessageMiddleware(
                 allowed_chat_ids=settings.allowed_chat_ids,
                 bootstrap_service=bootstrap_service,
+                access_service=access_service,
+                admin_user_ids=settings.admin_user_ids,
             )
         )
         dispatcher.callback_query.outer_middleware(
             AllowedCallbackQueryMiddleware(
                 allowed_chat_ids=settings.allowed_chat_ids,
                 bootstrap_service=bootstrap_service,
+                access_service=access_service,
+                admin_user_ids=settings.admin_user_ids,
             )
         )
+        dispatcher["access_service"] = access_service
+        dispatcher["bootstrap_service"] = bootstrap_service
+        dispatcher["admin_user_ids"] = settings.admin_user_ids
         report_service = ReportService(session_factory)
         budget_service = BudgetService(session_factory)
         dispatcher["report_service"] = report_service

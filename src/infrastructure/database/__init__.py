@@ -2,6 +2,9 @@
 
 from infrastructure.database.base import Base
 from infrastructure.database.models import (
+    AccessGrant,
+    AccessInvitation,
+    AccessRequest,
     Budget,
     Category,
     Household,
@@ -17,6 +20,9 @@ from infrastructure.database.models import (
 from infrastructure.database.session import create_engine, create_session_factory, session_scope
 
 __all__ = [
+    "AccessGrant",
+    "AccessInvitation",
+    "AccessRequest",
     "Base",
     "Budget",
     "Category",

@@ -101,12 +101,14 @@ async def test_allowed_message_bootstraps_context_and_calls_handler() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("chat_id", "chat_type", "is_bot"),
-    [(-100999, "supergroup", False), (-100123, "supergroup", True), (-100123, "private", False)],
+    [(-100999, "supergroup", False), (-100123, "supergroup", True)],
 )
 async def test_non_allowed_chats_and_bots_are_ignored(
     chat_id: int, chat_type: str, is_bot: bool
 ) -> None:
-    message, update = make_message(chat_id=chat_id, chat_type=chat_type, is_bot=is_bot)
+    message, update = make_message(
+        chat_id=chat_id, chat_type=chat_type, is_bot=is_bot, text="звичайне повідомлення"
+    )
     bootstrap = AsyncMock()
     middleware = AllowedMessageMiddleware(
         allowed_chat_ids=frozenset({-100123}),
@@ -119,6 +121,44 @@ async def test_non_allowed_chats_and_bots_are_ignored(
     assert result is None
     bootstrap.assert_not_awaited()
     handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_start_is_forwarded_only_to_access_handler() -> None:
+    message, update = make_message(chat_id=123456, chat_type="private", text="/start")
+    middleware = AllowedMessageMiddleware(
+        allowed_chat_ids=frozenset({-100123}),
+        bootstrap_service=SimpleNamespace(bootstrap=AsyncMock()),
+        access_service=SimpleNamespace(is_allowed=AsyncMock(return_value=False)),
+    )
+    handler = AsyncMock(return_value="access")
+    data = {"event_update": update}
+
+    result = await middleware(handler, message, data)
+
+    assert result == "access"
+    assert data["access_bootstrap"] is True
+    handler.assert_awaited_once()
+    middleware.bootstrap_service.bootstrap.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_database_grant_allows_private_chat() -> None:
+    message, update = make_message(chat_id=123456, chat_type="private", text="/menu")
+    household = Household(id=1, telegram_chat_id=message.chat.id, name="Олена")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена")
+    bootstrap = AsyncMock(return_value=TelegramContext(household=household, member=member))
+    middleware = AllowedMessageMiddleware(
+        allowed_chat_ids=frozenset({-100123}),
+        bootstrap_service=SimpleNamespace(bootstrap=bootstrap),
+        access_service=SimpleNamespace(is_allowed=AsyncMock(return_value=True)),
+    )
+    handler = AsyncMock(return_value="handled")
+
+    result = await middleware(handler, message, {"event_update": update})
+
+    assert result == "handled"
+    bootstrap.assert_awaited_once()
 
 
 @pytest.mark.asyncio

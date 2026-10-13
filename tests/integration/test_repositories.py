@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.services import (
+    AccessService,
     BudgetService,
     CategoryService,
     ClarificationService,
@@ -37,6 +38,7 @@ from domain.models import (
     RecognizedTransaction,
 )
 from infrastructure.database import (
+    AccessInvitation,
     Category,
     Household,
     MemberAlias,
@@ -193,6 +195,91 @@ async def test_categories_are_isolated_by_household(session: AsyncSession) -> No
     assert await repository.list_available(second.id) == []
     assert await repository.get_for_household(second.id, first_category.id) is None
     assert await repository.get_for_household(first.id, first_category.id) == first_category
+
+
+@pytest.mark.asyncio
+async def test_access_invitations_requests_and_revocation(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = AccessService(service_session_factory)
+    invitation = await service.create_invitation(
+        created_by_user_id=42, target_type="private"
+    )
+
+    wrong_target = await service.redeem_invitation(
+        token=invitation.token,
+        telegram_chat_id=-100700,
+        chat_type="supergroup",
+        title="Wrong group",
+        username=None,
+    )
+    assert wrong_target.status == "wrong_target"
+
+    redeemed = await service.redeem_invitation(
+        token=invitation.token,
+        telegram_chat_id=700,
+        chat_type="private",
+        title="Олена",
+        username="olena",
+    )
+    assert redeemed.status == "granted"
+    assert await service.is_allowed(700) is True
+    assert (
+        await service.redeem_invitation(
+            token=invitation.token,
+            telegram_chat_id=701,
+            chat_type="private",
+            title="Інший користувач",
+            username=None,
+        )
+    ).status == "used"
+
+    request = await service.request_access(
+        telegram_chat_id=-100701,
+        requester_user_id=43,
+        chat_type="supergroup",
+        title="Сімейна група",
+        username=None,
+    )
+    assert [item.id for item in await service.list_pending_requests()] == [request.id]
+    approved = await service.approve_request(request_id=request.id, reviewed_by_user_id=42)
+    assert approved is not None
+    assert await service.is_allowed(-100701) is True
+    assert await service.approve_request(request_id=request.id, reviewed_by_user_id=42) is None
+
+    revoked = await service.revoke(-100701)
+    assert revoked is not None
+    assert await service.is_allowed(-100701) is False
+
+    expiring = await service.create_invitation(created_by_user_id=42, target_type="private")
+    async with session_scope(service_session_factory) as db_session:
+        await db_session.execute(
+            update(AccessInvitation)
+            .where(AccessInvitation.used_at.is_(None))
+            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+    expired = await service.redeem_invitation(
+        token=expiring.token,
+        telegram_chat_id=702,
+        chat_type="private",
+        title="Expired",
+        username=None,
+    )
+    assert expired.status == "expired"
+
+    rejected_request = await service.request_access(
+        telegram_chat_id=703,
+        requester_user_id=44,
+        chat_type="private",
+        title="Rejected",
+        username=None,
+    )
+    rejected = await service.reject_request(
+        request_id=rejected_request.id, reviewed_by_user_id=42
+    )
+    assert rejected is not None
+    assert rejected.status == "rejected"
+    assert await service.is_allowed(703) is False
 
 
 @pytest.mark.asyncio

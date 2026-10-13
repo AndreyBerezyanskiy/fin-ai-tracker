@@ -102,7 +102,9 @@ TELEGRAM_BOT_TOKEN=...
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-6-luna
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DATABASE?sslmode=require
-ALLOWED_CHAT_IDS=-1001234567890
+ADMIN_USER_IDS=123456789
+# Необов'язковий аварійний список уже відомих чатів через кому.
+ALLOWED_CHAT_IDS=
 APP_ENV=production
 LOG_LEVEL=INFO
 TELEGRAM_TIMEOUT_SECONDS=20
