@@ -45,6 +45,7 @@ from bot.keyboards import (
     planned_expense_edit_keyboard,
     planned_expenses_keyboard,
     settings_keyboard,
+    statistics_result_keyboard,
     transaction_category_keyboard,
     uncategorized_transactions_keyboard,
 )
@@ -159,7 +160,18 @@ async def _answer_statistics_query(
         )
         total = sum((item.amount for item in section_items), Decimal("0.00"))
         lines.append(f"Разом: {_currency_prefix(household.currency)}{total:.2f}")
-    await message.answer("\n".join(lines))
+    has_expenses = any(item.type is TransactionType.EXPENSE for item in items)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=(
+            statistics_result_keyboard(
+                start_date=query.start_date.isoformat(),
+                end_date=(query.end_date + timedelta(days=1)).isoformat(),
+            )
+            if has_expenses
+            else None
+        ),
+    )
 
 
 def _today(household: Household) -> date:
@@ -1881,7 +1893,18 @@ async def stats_command(
             f"Разом: {_currency_prefix(household.currency)}"
             f"{sum((item.amount for item in items), Decimal('0.00')):.2f}"
         )
-    await message.answer("\n".join(lines))
+    has_expenses = any(item.type is TransactionType.EXPENSE for item in statistics)
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=(
+            statistics_result_keyboard(
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+            )
+            if has_expenses
+            else None
+        ),
+    )
 
 
 async def handle_error(event: ErrorEvent) -> bool:

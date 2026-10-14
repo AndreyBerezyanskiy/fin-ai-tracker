@@ -18,6 +18,7 @@ from application.services import (
     BudgetService,
     CategoryService,
     ClarificationService,
+    ExpenseChartService,
     HouseholdSettingsService,
     PlannedExpenseService,
     ReportService,
@@ -40,6 +41,7 @@ from bot.middlewares import (
 )
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
+from infrastructure.expense_chart_renderer import PillowExpenseChartRenderer
 from infrastructure.health import WorkerHeartbeat
 from infrastructure.observability import configure_logging
 from infrastructure.openai import (
@@ -97,7 +99,12 @@ def create_dispatcher(
         budget_service = BudgetService(session_factory)
         dispatcher["report_service"] = report_service
         dispatcher["budget_service"] = budget_service
-        dispatcher["category_service"] = CategoryService(session_factory)
+        category_service = CategoryService(session_factory)
+        dispatcher["category_service"] = category_service
+        dispatcher["expense_chart_service"] = ExpenseChartService(
+            category_service,
+            PillowExpenseChartRenderer(),
+        )
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)
         dispatcher["planned_expense_service"] = PlannedExpenseService(session_factory)

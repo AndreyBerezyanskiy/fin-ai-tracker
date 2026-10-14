@@ -4,16 +4,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.types import BufferedInputFile
 
+from application.services.expense_charts import ExpenseChartData, ExpenseChartResult
 from bot.handlers.menu import (
     add_category_name,
     category_menu_callback,
+    expense_chart_callback,
     menu_callback,
     menu_command,
     settings_menu_callback,
 )
 from bot.keyboards import (
     CategoryMenuCallback,
+    ExpenseChartCallback,
     MenuCallback,
     SettingsMenuCallback,
     currency_keyboard,
@@ -182,7 +186,75 @@ async def test_stats_menu_callback_edits_current_message() -> None:
     text = callback.message.edit_text.await_args.args[0]
     assert "Статистика за" in text
     assert "Продукти: €45.00" in text
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "📊 Показати діаграму"
     category_service.statistics.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_expense_chart_callback_sends_generated_png() -> None:
+    message = SimpleNamespace(answer_photo=AsyncMock())
+    callback = SimpleNamespace(message=message, answer=AsyncMock())
+    data = ExpenseChartData(
+        period_label="Жовтень 2026",
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+        total=Decimal("859.90"),
+        categories=(),
+        previous_total=Decimal("933.90"),
+        difference=Decimal("-74.00"),
+        difference_percentage=Decimal("-7.923"),
+    )
+    service = SimpleNamespace(
+        create=AsyncMock(return_value=ExpenseChartResult(data=data, image=b"png-data"))
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+    )
+
+    await expense_chart_callback(
+        callback,
+        ExpenseChartCallback(start_date="2026-10-01", end_date="2026-11-01"),
+        household,
+        service,
+    )
+
+    service.create.assert_awaited_once_with(
+        household_id=1,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+    )
+    photo = message.answer_photo.await_args.args[0]
+    assert isinstance(photo, BufferedInputFile)
+    assert photo.data == b"png-data"
+    assert "€859.90" in message.answer_photo.await_args.kwargs["caption"]
+    callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_expense_chart_callback_reports_empty_period() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(answer_photo=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    service = SimpleNamespace(create=AsyncMock(return_value=None))
+
+    await expense_chart_callback(
+        callback,
+        ExpenseChartCallback(start_date="2026-10-01", end_date="2026-11-01"),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="UAH"),
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "За цей період немає витрат.", show_alert=True
+    )
+    callback.message.answer_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio

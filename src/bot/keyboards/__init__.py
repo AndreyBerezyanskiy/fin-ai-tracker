@@ -10,6 +10,7 @@ from bot.keyboards.access import (
 )
 from bot.keyboards.menu import (
     CategoryMenuCallback,
+    ExpenseChartCallback,
     MenuCallback,
     SettingsMenuCallback,
     back_to_main_keyboard,
@@ -24,6 +25,7 @@ from bot.keyboards.menu import (
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
     settings_keyboard,
+    statistics_result_keyboard,
     stats_menu_keyboard,
     timezone_keyboard,
 )
@@ -51,6 +53,7 @@ __all__ = [
     "ai_usage_detail_keyboard",
     "ai_usage_keyboard",
     "CategoryMenuCallback",
+    "ExpenseChartCallback",
     "MenuCallback",
     "SettingsMenuCallback",
     "TransactionActionCallback",
@@ -85,5 +88,6 @@ __all__ = [
     "uncategorized_transactions_keyboard",
     "settings_keyboard",
     "stats_menu_keyboard",
+    "statistics_result_keyboard",
     "timezone_keyboard",
 ]

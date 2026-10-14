@@ -7,10 +7,11 @@ from aiogram import Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from application.services import (
     CategoryService,
+    ExpenseChartService,
     HouseholdSettingsService,
     PlannedExpenseService,
     TransactionService,
@@ -25,6 +26,7 @@ from bot.handlers.commands import (
 )
 from bot.keyboards import (
     CategoryMenuCallback,
+    ExpenseChartCallback,
     MenuCallback,
     SettingsMenuCallback,
     back_to_main_keyboard,
@@ -39,6 +41,7 @@ from bot.keyboards import (
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
     settings_keyboard,
+    statistics_result_keyboard,
     stats_menu_keyboard,
     timezone_keyboard,
     uncategorized_transactions_keyboard,
@@ -160,7 +163,14 @@ async def menu_callback(
         await _edit(
             callback,
             _statistics_text(title, statistics, household.currency),
-            reply_markup=stats_menu_keyboard(),
+            reply_markup=(
+                statistics_result_keyboard(
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                )
+                if any(item.type is TransactionType.EXPENSE for item in statistics)
+                else stats_menu_keyboard()
+            ),
         )
         return
     if section == "categories":
@@ -232,6 +242,48 @@ async def menu_callback(
         )
         return
     await callback.answer("Невідомий розділ.", show_alert=True)
+
+
+async def expense_chart_callback(
+    callback: CallbackQuery,
+    callback_data: ExpenseChartCallback,
+    household: Household,
+    expense_chart_service: ExpenseChartService,
+) -> None:
+    try:
+        start_date = date.fromisoformat(callback_data.start_date)
+        end_date = date.fromisoformat(callback_data.end_date)
+    except ValueError:
+        await callback.answer("Некоректний період статистики.", show_alert=True)
+        return
+    if end_date <= start_date or end_date - start_date > timedelta(days=3660):
+        await callback.answer("Некоректний період статистики.", show_alert=True)
+        return
+
+    result = await expense_chart_service.create(
+        household_id=household.id,
+        start_date=start_date,
+        end_date=end_date,
+        currency=household.currency,
+    )
+    if result is None:
+        await callback.answer("За цей період немає витрат.", show_alert=True)
+        return
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    await callback.message.answer_photo(
+        BufferedInputFile(
+            result.image,
+            filename=f"expenses-{start_date.isoformat()}-{end_date.isoformat()}.png",
+        ),
+        caption=(
+            f"📊 Витрати • {result.data.period_label}\n"
+            f"Усього: {_currency_prefix(household.currency)}{result.data.total:.2f}"
+        ),
+    )
+    await callback.answer()
 
 
 async def _effective_category(
@@ -515,9 +567,10 @@ def create_menu_router() -> Router:
     router.message.register(add_category_name, StateFilter(CategoryEditStates.add_name))
     router.message.register(rename_category_name, StateFilter(CategoryEditStates.rename_name))
     router.callback_query.register(menu_callback, MenuCallback.filter())
+    router.callback_query.register(expense_chart_callback, ExpenseChartCallback.filter())
     router.callback_query.register(category_menu_callback, CategoryMenuCallback.filter())
     router.callback_query.register(settings_menu_callback, SettingsMenuCallback.filter())
     return router
 
 
-__all__ = ["CategoryEditStates", "create_menu_router"]
+__all__ = ["CategoryEditStates", "create_menu_router", "expense_chart_callback"]

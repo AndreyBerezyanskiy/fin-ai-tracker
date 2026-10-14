@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.16,<2",
     "apscheduler>=3.11,<4",
     "openai>=2,<3",
+    "pillow>=11,<13",
     "psycopg[binary]>=3.2,<4",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",

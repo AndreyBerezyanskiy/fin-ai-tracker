@@ -1003,6 +1003,8 @@ async def test_statistics_period_clarification_keeps_original_context() -> None:
         end_date=date(2026, 10, 13),
     )
     assert "Продукти: €85.40" in message.answer.await_args_list[-1].args[0]
+    keyboard = message.answer.await_args_list[-1].kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "📊 Показати діаграму"
     transaction_service.create_pending.assert_not_awaited()
     indicator.delete.assert_awaited_once()
 
@@ -1232,6 +1234,8 @@ async def test_stats_command_groups_income_and_expenses() -> None:
     assert "Статистика за 10.2026" in answer
     assert "Продукти: €117.00" in answer
     assert "Зарплата: €2500.00" in answer
+    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "📊 Показати діаграму"
     service.statistics.assert_awaited_once_with(
         household_id=1,
         start_date=datetime(2026, 10, 1).date(),

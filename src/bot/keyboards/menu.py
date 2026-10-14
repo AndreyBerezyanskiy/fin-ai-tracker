@@ -14,6 +14,11 @@ class MenuCallback(CallbackData, prefix="menu"):
     section: str
 
 
+class ExpenseChartCallback(CallbackData, prefix="chart"):
+    start_date: str
+    end_date: str
+
+
 class CategoryMenuCallback(CallbackData, prefix="cat"):
     action: str
     value: str
@@ -47,6 +52,23 @@ def stats_menu_keyboard() -> InlineKeyboardMarkup:
             [_menu_button("Сьогодні", "stats_today"), _menu_button("Цей місяць", "stats_month")],
             [_menu_button("Обрати місяць", "stats_choose")],
             [_menu_button("← Назад", "home")],
+        ]
+    )
+
+
+def statistics_result_keyboard(*, start_date: str, end_date: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📊 Показати діаграму",
+                    callback_data=ExpenseChartCallback(
+                        start_date=start_date,
+                        end_date=end_date,
+                    ).pack(),
+                )
+            ],
+            [_menu_button("← Інший період", "stats")],
         ]
     )
 
@@ -290,6 +312,7 @@ def planned_expenses_menu_keyboard(
 
 __all__ = [
     "CategoryMenuCallback",
+    "ExpenseChartCallback",
     "MenuCallback",
     "SettingsMenuCallback",
     "back_to_main_keyboard",
@@ -305,5 +328,6 @@ __all__ = [
     "planned_expenses_menu_keyboard",
     "settings_keyboard",
     "stats_menu_keyboard",
+    "statistics_result_keyboard",
     "timezone_keyboard",
 ]
