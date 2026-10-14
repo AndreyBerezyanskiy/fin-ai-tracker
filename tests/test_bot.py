@@ -227,7 +227,15 @@ async def test_help_and_settings_commands_answer_in_ukrainian() -> None:
     await help_command(message)
     await settings_command(message, household)
 
-    assert "/today" in message.answer.await_args_list[0].args[0]
+    help_text = message.answer.await_args_list[0].args[0]
+    assert "/today" in help_text
+    assert "✨ Основні можливості:" in help_text
+    assert "голосом" in help_text
+    assert "нагадування" in help_text
+    assert "діаграми" in help_text
+    assert "Excel-звіти" in help_text
+    assert "Privacy Mode" not in help_text
+    assert "@BotFather" not in help_text
     assert "Europe/Paris" in message.answer.await_args_list[1].args[0]
 
 
