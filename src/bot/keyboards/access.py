@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from application.services.voice import VoiceFeatureStatus
 from infrastructure.database import AccessGrant, AccessRequest
 
 
@@ -42,7 +43,9 @@ def access_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
 
 
 def access_management_keyboard(
-    requests: Iterable[AccessRequest], grants: Iterable[AccessGrant]
+    requests: Iterable[AccessRequest],
+    grants: Iterable[AccessGrant],
+    voice_status: VoiceFeatureStatus | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [
@@ -58,6 +61,21 @@ def access_management_keyboard(
             )
         ],
     ]
+    if voice_status is not None:
+        if not voice_status.configured:
+            voice_label = "🔒 Голос вимкнено в .env"
+        elif voice_status.enabled:
+            voice_label = "🎙 Вимкнути голос"
+        else:
+            voice_label = "🎙 Увімкнути голос"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=voice_label,
+                    callback_data=AccessCallback(action="voice_toggle", value="0").pack(),
+                )
+            ]
+        )
     for request in list(requests)[:20]:
         rows.append(
             [

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     allowed_chat_ids_raw: str = Field(default="", alias="ALLOWED_CHAT_IDS")
     admin_user_ids_raw: str = Field(default="", alias="ADMIN_USER_IDS")
     openai_model: str = "gpt-6-luna"
+    openai_transcription_model: str = "gpt-transcribe"
     app_env: AppEnvironment = "development"
     log_level: str = "INFO"
     telegram_timeout_seconds: PositiveFloat = 20.0
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     database_connect_timeout_seconds: PositiveInt = 10
     max_message_length: PositiveInt = Field(default=1000, le=4096)
     ai_requests_per_minute: PositiveInt = Field(default=10, le=120)
+    voice_input_enabled: bool = False
+    voice_requests_per_minute: PositiveInt = Field(default=5, le=60)
+    max_voice_duration_seconds: PositiveInt = Field(default=60, le=600)
+    max_voice_file_size_bytes: PositiveInt = Field(default=5_000_000, le=20_000_000)
     store_original_text: bool = True
     worker_heartbeat_file: str = "/tmp/family-finance-worker.heartbeat"
     worker_heartbeat_interval_seconds: PositiveFloat = 10.0

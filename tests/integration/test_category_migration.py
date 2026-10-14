@@ -21,6 +21,9 @@ def test_used_global_category_is_localized_without_losing_references() -> None:
     assert TEST_DATABASE_URL is not None
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
+    # The disposable database may already be at head after another integration test.
+    # Start from a known state because ``upgrade`` never moves backwards.
+    command.downgrade(config, "base")
     command.upgrade(config, "20261012_10")
     engine = create_engine(TEST_DATABASE_URL)
     try:

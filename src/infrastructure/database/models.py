@@ -225,6 +225,13 @@ class AccessRequest(TimestampMixin, Base):
     reviewed_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class FeatureFlag(TimestampMixin, Base):
+    __tablename__ = "feature_flags"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (Index("uq_categories_household_code", "household_id", "code", unique=True),)

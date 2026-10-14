@@ -7,7 +7,12 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, Update
 
-from application.services import AccessService, TelegramBootstrapService
+from application.services import (
+    AccessService,
+    TelegramBootstrapService,
+    VoiceFeatureService,
+    VoiceFeatureStatus,
+)
 from bot.handlers.commands import HELP_TEXT
 from bot.keyboards import (
     AccessCallback,
@@ -131,11 +136,18 @@ async def access_start_command(
 
 
 def _access_text(
-    requests: tuple[AccessRequest, ...], grants: tuple[AccessGrant, ...]
+    requests: tuple[AccessRequest, ...],
+    grants: tuple[AccessGrant, ...],
+    voice_status: VoiceFeatureStatus | None = None,
 ) -> str:
     lines = ["👥 Керування доступом", ""]
     lines.append(f"Очікують схвалення: {len(requests)}")
     lines.append(f"Активні підключення: {len(grants)}")
+    if voice_status is not None:
+        voice = "увімкнені" if voice_status.enabled else "вимкнені"
+        if not voice_status.configured:
+            voice += " у .env"
+        lines.append(f"Голосові повідомлення: {voice}")
     if grants:
         lines.extend(["", "Підключення:"])
         for grant in grants:
@@ -145,13 +157,20 @@ def _access_text(
     return "\n".join(lines)
 
 
-async def _show_access_menu(callback: CallbackQuery, service: AccessService) -> None:
+async def _show_access_menu(
+    callback: CallbackQuery,
+    service: AccessService,
+    voice_feature_service: VoiceFeatureService | None = None,
+) -> None:
     requests = await service.list_pending_requests()
     grants = await service.list_active_grants()
+    voice_status = (
+        await voice_feature_service.status() if voice_feature_service is not None else None
+    )
     if callback.message is not None:
         await callback.message.edit_text(
-            _access_text(requests, grants),
-            reply_markup=access_management_keyboard(requests, grants),
+            _access_text(requests, grants, voice_status),
+            reply_markup=access_management_keyboard(requests, grants, voice_status),
         )
 
 
@@ -160,6 +179,7 @@ async def access_callback(
     callback_data: AccessCallback,
     bot: Bot,
     access_service: AccessService,
+    voice_feature_service: VoiceFeatureService | None = None,
     is_access_admin: bool = False,
 ) -> None:
     if not is_access_admin:
@@ -167,8 +187,27 @@ async def access_callback(
         return
     action, value = callback_data.action, callback_data.value
     if action == "menu":
-        await _show_access_menu(callback, access_service)
+        await _show_access_menu(callback, access_service, voice_feature_service)
         await callback.answer()
+        return
+    if action == "voice_toggle":
+        if voice_feature_service is None:
+            await callback.answer("Керування голосом недоступне.", show_alert=True)
+            return
+        current = await voice_feature_service.status()
+        if not current.configured:
+            await callback.answer(
+                "Спочатку встановіть VOICE_INPUT_ENABLED=true у .env.",
+                show_alert=True,
+            )
+            return
+        updated = await voice_feature_service.toggle()
+        await _show_access_menu(callback, access_service, voice_feature_service)
+        await callback.answer(
+            "Голосові повідомлення увімкнено."
+            if updated.enabled
+            else "Голосові повідомлення вимкнено."
+        )
         return
     if action == "close":
         if callback.message is not None:
@@ -218,7 +257,7 @@ async def access_callback(
             await bot.send_message(request.telegram_chat_id, notification)
         except TelegramAPIError:
             logger.warning("Could not deliver access decision")
-        await _show_access_menu(callback, access_service)
+        await _show_access_menu(callback, access_service, voice_feature_service)
         await callback.answer("Готово.")
         return
     if action == "revoke":
@@ -235,7 +274,7 @@ async def access_callback(
             await bot.send_message(grant.telegram_chat_id, "🔒 Доступ до бота відкликано.")
         except TelegramAPIError:
             logger.warning("Could not deliver access revocation")
-        await _show_access_menu(callback, access_service)
+        await _show_access_menu(callback, access_service, voice_feature_service)
         await callback.answer("Доступ відкликано.")
         return
     await callback.answer("Невідома дія.", show_alert=True)

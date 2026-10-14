@@ -18,6 +18,7 @@ from application.services.telegram import (
     TelegramContext,
 )
 from application.services.transactions import BatchTransitionResult, TransactionService
+from application.services.voice import VoiceFeatureService, VoiceFeatureStatus
 
 __all__ = [
     "AccessService",
@@ -44,5 +45,7 @@ __all__ = [
     "InvitationLink",
     "RedemptionResult",
     "TransactionService",
+    "VoiceFeatureService",
+    "VoiceFeatureStatus",
     "TransactionRecognitionService",
 ]

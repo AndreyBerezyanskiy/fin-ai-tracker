@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from application.services import VoiceFeatureStatus
 from bot.handlers.access import access_callback, access_start_command
 from bot.keyboards import AccessCallback
 
@@ -126,4 +127,62 @@ async def test_non_admin_cannot_use_access_callbacks() -> None:
 
     callback.answer.assert_awaited_once_with(
         "Ця дія доступна лише адміністратору.", show_alert=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_can_toggle_voice_from_access_menu() -> None:
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    access_service = SimpleNamespace(
+        list_pending_requests=AsyncMock(return_value=()),
+        list_active_grants=AsyncMock(return_value=()),
+    )
+    voice_service = SimpleNamespace(
+        status=AsyncMock(
+            side_effect=[VoiceFeatureStatus(True, True), VoiceFeatureStatus(True, False)]
+        ),
+        toggle=AsyncMock(return_value=VoiceFeatureStatus(True, False)),
+    )
+
+    await access_callback(
+        callback,
+        AccessCallback(action="voice_toggle", value="0"),
+        SimpleNamespace(),
+        access_service,
+        voice_service,
+        is_access_admin=True,
+    )
+
+    voice_service.toggle.assert_awaited_once()
+    assert "вимкнено" in callback.answer.await_args.args[0]
+    assert "Голосові повідомлення: вимкнені" in (
+        callback.message.edit_text.await_args.args[0]
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_override_voice_env_kill_switch() -> None:
+    callback = SimpleNamespace(answer=AsyncMock())
+    voice_service = SimpleNamespace(
+        status=AsyncMock(return_value=VoiceFeatureStatus(False, True)),
+        toggle=AsyncMock(),
+    )
+
+    await access_callback(
+        callback,
+        AccessCallback(action="voice_toggle", value="0"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        voice_service,
+        is_access_admin=True,
+    )
+
+    voice_service.toggle.assert_not_awaited()
+    callback.answer.assert_awaited_once_with(
+        "Спочатку встановіть VOICE_INPUT_ENABLED=true у .env.",
+        show_alert=True,
     )

@@ -3,10 +3,12 @@
 from bot.handlers.access import create_access_router
 from bot.handlers.commands import create_commands_router, handle_error
 from bot.handlers.menu import create_menu_router
+from bot.handlers.voice import create_voice_router
 
 __all__ = [
     "create_access_router",
     "create_commands_router",
     "create_menu_router",
+    "create_voice_router",
     "handle_error",
 ]

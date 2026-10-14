@@ -21,6 +21,7 @@ from application.services import (
     PlannedExpenseService,
     ReportService,
     TransactionService,
+    VoiceFeatureService,
 )
 from domain.category_templates import CATEGORY_TEMPLATES
 from domain.enums import (
@@ -40,6 +41,7 @@ from domain.models import (
 from infrastructure.database import (
     AccessInvitation,
     Category,
+    FeatureFlag,
     Household,
     MemberAlias,
     ProcessedTelegramUpdate,
@@ -119,6 +121,7 @@ async def service_session_factory(
     engine = create_engine(migrated_database)
     factory = create_session_factory(engine)
     async with session_scope(factory) as db_session:
+        await db_session.execute(delete(FeatureFlag))
         await db_session.execute(
             delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
         )
@@ -129,6 +132,7 @@ async def service_session_factory(
         yield factory
     finally:
         async with session_scope(factory) as db_session:
+            await db_session.execute(delete(FeatureFlag))
             await db_session.execute(
                 delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
             )
@@ -181,6 +185,27 @@ async def test_household_currency_can_be_changed(
     assert updated.currency == "UAH"
     with pytest.raises(ValueError, match="unsupported currency"):
         await service.set_currency(household_id=household_id, currency="BTC")
+
+
+@pytest.mark.asyncio
+async def test_voice_feature_flag_persists_and_respects_environment_switch(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    enabled_service = VoiceFeatureService(service_session_factory, configured=True)
+    assert (await enabled_service.status()).enabled is True
+
+    disabled = await enabled_service.set_admin_enabled(enabled=False)
+    assert disabled.enabled is False
+    persisted = await VoiceFeatureService(
+        service_session_factory, configured=True
+    ).status()
+    assert persisted.enabled is False
+
+    await enabled_service.set_admin_enabled(enabled=True)
+    env_disabled = VoiceFeatureService(service_session_factory, configured=False)
+    status = await env_disabled.status()
+    assert status.admin_enabled is True
+    assert status.enabled is False
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,9 @@ def test_settings_are_loaded_and_normalized(settings_env: None) -> None:
     assert settings.admin_user_ids == frozenset({42, 43})
     assert settings.sqlalchemy_database_url.startswith("postgresql+psycopg://")
     assert settings.openai_model == "gpt-6-luna"
+    assert settings.openai_transcription_model == "gpt-transcribe"
+    assert settings.voice_input_enabled is False
+    assert settings.max_voice_duration_seconds == 60
     assert "test-openai-key" not in repr(settings)
 
 

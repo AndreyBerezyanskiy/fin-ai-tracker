@@ -24,6 +24,10 @@ RUN groupadd --gid 10001 appuser \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-index --find-links=/wheels family-finance-tracker
 

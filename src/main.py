@@ -23,11 +23,13 @@ from application.services import (
     TelegramBootstrapService,
     TransactionRecognitionService,
     TransactionService,
+    VoiceFeatureService,
 )
 from bot.handlers import (
     create_access_router,
     create_commands_router,
     create_menu_router,
+    create_voice_router,
     handle_error,
 )
 from bot.middlewares import (
@@ -39,7 +41,11 @@ from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
 from infrastructure.health import WorkerHeartbeat
 from infrastructure.observability import configure_logging
-from infrastructure.openai import OpenAIAdviceGenerator, OpenAITransactionRecognizer
+from infrastructure.openai import (
+    OpenAIAdviceGenerator,
+    OpenAITransactionRecognizer,
+    OpenAIVoiceTranscriber,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +60,7 @@ def create_dispatcher(
     dispatcher = Dispatcher()
     dispatcher.include_router(create_access_router())
     dispatcher.include_router(create_menu_router())
+    dispatcher.include_router(create_voice_router())
     dispatcher.include_router(create_commands_router())
     dispatcher.startup.register(set_bot_commands)
     dispatcher.errors.register(handle_error)
@@ -81,6 +88,10 @@ def create_dispatcher(
         dispatcher["access_service"] = access_service
         dispatcher["bootstrap_service"] = bootstrap_service
         dispatcher["admin_user_ids"] = settings.admin_user_ids
+        dispatcher["voice_feature_service"] = VoiceFeatureService(
+            session_factory,
+            configured=settings.voice_input_enabled,
+        )
         report_service = ReportService(session_factory)
         budget_service = BudgetService(session_factory)
         dispatcher["report_service"] = report_service
@@ -112,7 +123,14 @@ def create_dispatcher(
             OpenAITransactionRecognizer(openai_client, model=settings.openai_model),
         )
         dispatcher["ai_rate_limiter"] = AIRateLimiter(settings.ai_requests_per_minute)
+        dispatcher["voice_rate_limiter"] = AIRateLimiter(settings.voice_requests_per_minute)
+        dispatcher["voice_transcriber"] = OpenAIVoiceTranscriber(
+            openai_client,
+            model=settings.openai_transcription_model,
+        )
         dispatcher["max_message_length"] = settings.max_message_length
+        dispatcher["max_voice_duration_seconds"] = settings.max_voice_duration_seconds
+        dispatcher["max_voice_file_size_bytes"] = settings.max_voice_file_size_bytes
         dispatcher["store_original_text"] = settings.store_original_text
 
     return dispatcher

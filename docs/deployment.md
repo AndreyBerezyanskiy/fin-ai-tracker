@@ -101,6 +101,7 @@ sudo -u financebot nano /opt/family-finance/.env.production
 TELEGRAM_BOT_TOKEN=...
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-6-luna
+OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DATABASE?sslmode=require
 ADMIN_USER_IDS=123456789
 # Необов'язковий аварійний список уже відомих чатів через кому.
@@ -113,10 +114,18 @@ OPENAI_MAX_RETRIES=2
 DATABASE_CONNECT_TIMEOUT_SECONDS=10
 MAX_MESSAGE_LENGTH=1000
 AI_REQUESTS_PER_MINUTE=10
+VOICE_INPUT_ENABLED=true
+VOICE_REQUESTS_PER_MINUTE=5
+MAX_VOICE_DURATION_SECONDS=60
+MAX_VOICE_FILE_SIZE_BYTES=5000000
 STORE_ORIGINAL_TEXT=true
 WORKER_HEARTBEAT_FILE=/tmp/family-finance-worker.heartbeat
 WORKER_HEARTBEAT_INTERVAL_SECONDS=10
 ```
+
+`VOICE_INPUT_ENABLED=false` повністю блокує завантаження та транскрипцію аудіо. Якщо він
+дорівнює `true`, адміністратор може оперативно призупинити або відновити голосові
+повідомлення у приватному меню `Керування доступом`; стан зберігається в PostgreSQL.
 
 Не задавайте `TEST_DATABASE_URL` у production. Перевірте права без друку вмісту:
 

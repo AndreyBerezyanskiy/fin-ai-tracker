@@ -552,6 +552,53 @@ async def test_plain_message_returns_recognized_transactions_in_ukrainian() -> N
 
 
 @pytest.mark.asyncio
+async def test_transcribed_voice_text_uses_the_regular_transaction_flow() -> None:
+    processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    message = SimpleNamespace(
+        message_id=10,
+        text=None,
+        answer=AsyncMock(),
+        reply=AsyncMock(return_value=processing_message),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR")
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена")
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(
+            RecognizedTransaction(
+                type=TransactionType.EXPENSE,
+                amount=Decimal("5.00"),
+                currency="EUR",
+                category_code="cafes_restaurants",
+                description="Кава",
+                date="2026-10-13",
+            ),
+        ),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+    )
+    recognition_service = SimpleNamespace(recognize=AsyncMock(return_value=result))
+    transaction_service = SimpleNamespace(create_pending=AsyncMock(return_value=()))
+
+    await recognize_plain_message(
+        message,
+        household,
+        member,
+        recognition_service,
+        transaction_service,
+        recognized_text="кава 5 євро",
+    )
+
+    recognition_service.recognize.assert_awaited_once_with(
+        message="кава 5 євро", household=household, member=member
+    )
+    assert transaction_service.create_pending.await_args.kwargs["original_text"] == (
+        "кава 5 євро"
+    )
+
+
+@pytest.mark.asyncio
 async def test_plain_message_returns_filtered_statistics_for_requested_period() -> None:
     processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
     message = SimpleNamespace(

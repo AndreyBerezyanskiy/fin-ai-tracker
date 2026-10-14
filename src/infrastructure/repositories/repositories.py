@@ -23,6 +23,7 @@ from infrastructure.database.models import (
     AccessRequest,
     Budget,
     Category,
+    FeatureFlag,
     Household,
     Member,
     MemberAlias,
@@ -194,6 +195,29 @@ class AccessRepository:
         return await self.session.scalar(
             select(AccessRequest).where(AccessRequest.id == request_id).with_for_update()
         )
+
+
+class FeatureFlagRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def is_enabled(self, name: str, *, default: bool = True) -> bool:
+        value = await self.session.scalar(
+            select(FeatureFlag.enabled).where(FeatureFlag.name == name)
+        )
+        return default if value is None else value
+
+    async def set_enabled(self, name: str, *, enabled: bool) -> FeatureFlag:
+        statement = (
+            insert(FeatureFlag)
+            .values(name=name, enabled=enabled)
+            .on_conflict_do_update(
+                index_elements=[FeatureFlag.name],
+                set_={"enabled": enabled, "updated_at": func.now()},
+            )
+            .returning(FeatureFlag)
+        )
+        return (await self.session.scalars(statement)).one()
 
 
 class HouseholdRepository:

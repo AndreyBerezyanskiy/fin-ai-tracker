@@ -815,6 +815,7 @@ async def planned_expense_callback(
 async def _resolve_plan_postpone(
     message: Message,
     *,
+    answer_text: str,
     clarification: TransactionClarification,
     household: Household,
     member: Member,
@@ -827,7 +828,7 @@ async def _resolve_plan_postpone(
         household=household,
         member=member,
         clarification_question=clarification.question,
-        clarification_answer=message.text or "",
+        clarification_answer=answer_text,
     )
     if result.needs_clarification or not result.planned_expenses:
         if clarification.attempts + 1 >= MAX_CLARIFICATION_ATTEMPTS:
@@ -855,6 +856,7 @@ async def _resolve_plan_postpone(
 async def _resolve_plan_edit(
     message: Message,
     *,
+    answer_text: str,
     clarification: TransactionClarification,
     household: Household,
     member: Member,
@@ -869,7 +871,7 @@ async def _resolve_plan_edit(
         household=household,
         member=member,
         clarification_question=clarification.question,
-        clarification_answer=message.text or "",
+        clarification_answer=answer_text,
     )
     if result.needs_clarification or not result.planned_expenses:
         if clarification.attempts + 1 >= MAX_CLARIFICATION_ATTEMPTS:
@@ -980,10 +982,12 @@ async def recognize_plain_message(
     max_message_length: int = 1000,
     store_original_text: bool = True,
     planned_expense_service: PlannedExpenseService | None = None,
+    recognized_text: str | None = None,
 ) -> None:
-    if not message.text:
+    text = recognized_text if recognized_text is not None else message.text
+    if not text:
         return
-    if len(message.text) > max_message_length:
+    if len(text) > max_message_length:
         await message.answer(
             f"Повідомлення надто довге. Скоротіть його до {max_message_length} символів."
         )
@@ -1008,6 +1012,7 @@ async def recognize_plain_message(
                     return
                 await _resolve_plan_postpone(
                     message,
+                    answer_text=text,
                     clarification=clarification,
                     household=household,
                     member=member,
@@ -1020,7 +1025,7 @@ async def recognize_plain_message(
                 if category_service is None or not clarification.missing_category_type:
                     await message.answer("Не вдалося створити категорію. Скасуйте уточнення.")
                     return
-                name = message.text.strip()[:255]
+                name = text.strip()[:255]
                 if not name or name.startswith("/"):
                     await message.answer("Введіть назву категорії або скористайтеся /cancel.")
                     return
@@ -1072,6 +1077,7 @@ async def recognize_plain_message(
                     return
                 await _resolve_plan_edit(
                     message,
+                    answer_text=text,
                     clarification=clarification,
                     household=household,
                     member=member,
@@ -1083,7 +1089,7 @@ async def recognize_plain_message(
                 return
             await _resolve_clarification(
                 message,
-                answer=message.text,
+                answer=text,
                 clarification=clarification,
                 household=household,
                 member=member,
@@ -1104,7 +1110,7 @@ async def recognize_plain_message(
     try:
         try:
             result = await transaction_recognition_service.recognize(
-                message=message.text,
+                message=text,
                 household=household,
                 member=member,
             )
@@ -1125,7 +1131,7 @@ async def recognize_plain_message(
                 household_id=household.id,
                 member_id=member.id,
                 original_message_id=message.message_id,
-                original_text=message.text,
+                original_text=text,
                 question=result.clarification_question or "Уточніть операцію, будь ласка.",
                 ambiguous_member_name=result.ambiguous_member_name,
                 suggested_member_id=result.suggested_member_id,
@@ -1162,7 +1168,7 @@ async def recognize_plain_message(
                 household=household,
                 member=member,
                 telegram_message_id=message.message_id,
-                original_text=message.text if store_original_text else "",
+                original_text=text if store_original_text else "",
                 recognition=result,
             )
             for plan in plans:
@@ -1175,7 +1181,7 @@ async def recognize_plain_message(
             household=household,
             member=member,
             telegram_message_id=message.message_id,
-            original_text=message.text if store_original_text else "",
+            original_text=text if store_original_text else "",
             recognition=result,
         )
         await message.answer(
