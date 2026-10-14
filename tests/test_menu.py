@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.types import BufferedInputFile
 
+import bot.handlers.menu as menu_module
 from application.services.expense_charts import ExpenseChartData, ExpenseChartResult
 from bot.handlers.menu import (
     add_category_name,
@@ -23,6 +24,7 @@ from bot.keyboards import (
     MenuCallback,
     SettingsMenuCallback,
     currency_keyboard,
+    export_menu_keyboard,
     main_menu_keyboard,
     statistics_result_keyboard,
     stats_menu_keyboard,
@@ -91,6 +93,83 @@ def test_statistics_keyboards_offer_excel_only_for_full_months() -> None:
     assert "📥 Excel-звіт" in stats_labels
     assert "📥 Завантажити Excel" in month_labels
     assert "📥 Завантажити Excel" not in day_labels
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("button_text", "expected_value"),
+    [
+        ("Цей місяць", "2026-10_2026-10"),
+        ("Минулий місяць", "2026-09_2026-09"),
+        ("Цей рік", "2026-01_2026-10"),
+        ("Минулий рік", "2025-01_2025-12"),
+    ],
+)
+async def test_export_quick_period_buttons_reach_confirmation(
+    button_text: str, expected_value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    today = date(2026, 10, 14)
+    monkeypatch.setattr(menu_module, "_today", lambda _household: today)
+    keyboard = export_menu_keyboard(today)
+    button = next(
+        button
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.text == button_text
+    )
+    callback_data = ExportCallback.unpack(button.callback_data)
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+
+    await export_callback(callback, callback_data, household, SimpleNamespace())
+
+    confirmation = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    generate_button = confirmation.inline_keyboard[0][0]
+    generate_callback = ExportCallback.unpack(generate_button.callback_data)
+    assert generate_callback.action == "generate"
+    assert generate_callback.value == expected_value
+    callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_previously_sent_current_year_button_remains_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(menu_module, "_today", lambda _household: date(2026, 10, 14))
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+
+    await export_callback(
+        callback,
+        ExportCallback(action="confirm", value="2026-01_2026-12"),
+        household,
+        SimpleNamespace(),
+    )
+
+    confirmation = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    generate_callback = ExportCallback.unpack(
+        confirmation.inline_keyboard[0][0].callback_data
+    )
+    assert generate_callback.value == "2026-01_2026-10"
+    callback.answer.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -368,6 +447,32 @@ async def test_export_callback_sends_excel_document() -> None:
         "📥 Excel-звіт • Жовтень 2026"
     )
     callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_export_callback_reports_period_without_data() -> None:
+    message = SimpleNamespace(answer_document=AsyncMock())
+    callback = SimpleNamespace(message=message, answer=AsyncMock())
+    service = SimpleNamespace(create=AsyncMock(return_value=None))
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+
+    await export_callback(
+        callback,
+        ExportCallback(action="generate", value="2025-01_2025-12"),
+        household,
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "За цей період немає даних для звіту.", show_alert=True
+    )
+    message.answer_document.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -309,6 +309,19 @@ async def export_callback(
 ) -> None:
     action = callback_data.action
     today = _today(household)
+    if action == "confirm":
+        value = callback_data.value
+        full_current_year = f"{today.year:04d}-01_{today.year:04d}-12"
+        if value == full_current_year:
+            value = f"{today.year:04d}-01_{today.year:04d}-{today.month:02d}"
+        period = _export_period(value)
+        await _edit(
+            callback,
+            f"Період звіту: {period.label}",
+            reply_markup=export_confirmation_keyboard(value),
+        )
+        return
+
     if action == "menu":
         await _edit(
             callback,
@@ -364,7 +377,8 @@ async def export_callback(
 
     if action == "confirm_year":
         year = int(callback_data.value)
-        value = f"{year:04d}-01_{year:04d}-12"
+        end_month = today.month if year == today.year else 12
+        value = f"{year:04d}-01_{year:04d}-{end_month:02d}"
         period = _export_period(value)
         await _edit(
             callback,

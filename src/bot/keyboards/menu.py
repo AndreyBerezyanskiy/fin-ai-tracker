@@ -112,15 +112,15 @@ def export_menu_keyboard(today: date) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Цей місяць",
                     callback_data=ExportCallback(
-                        action="confirm",
-                        value=f"{current_month:%Y-%m}_{current_month:%Y-%m}",
+                        action="confirm_month",
+                        value=f"{current_month:%Y-%m}",
                     ).pack(),
                 ),
                 InlineKeyboardButton(
                     text="Минулий місяць",
                     callback_data=ExportCallback(
-                        action="confirm",
-                        value=f"{previous_month:%Y-%m}_{previous_month:%Y-%m}",
+                        action="confirm_month",
+                        value=f"{previous_month:%Y-%m}",
                     ).pack(),
                 ),
             ],
@@ -128,14 +128,14 @@ def export_menu_keyboard(today: date) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Цей рік",
                     callback_data=ExportCallback(
-                        action="confirm", value=f"{today.year}-01_{today.year}-12"
+                        action="confirm_year", value=str(today.year)
                     ).pack(),
                 ),
                 InlineKeyboardButton(
                     text="Минулий рік",
                     callback_data=ExportCallback(
-                        action="confirm",
-                        value=f"{today.year - 1}-01_{today.year - 1}-12",
+                        action="confirm_year",
+                        value=str(today.year - 1),
                     ).pack(),
                 ),
             ],
