@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.services import (
     AccessService,
+    AIUsageData,
+    AIUsageService,
     BudgetService,
     CategoryService,
     ClarificationService,
@@ -126,7 +128,9 @@ async def service_session_factory(
             delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
         )
         await db_session.execute(
-            delete(Household).where(Household.telegram_chat_id.in_((-100999, -100998)))
+            delete(Household).where(
+                Household.telegram_chat_id.in_((-100999, -100998, -100997))
+            )
         )
     try:
         yield factory
@@ -137,7 +141,9 @@ async def service_session_factory(
                 delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
             )
             await db_session.execute(
-                delete(Household).where(Household.telegram_chat_id.in_((-100999, -100998)))
+                delete(Household).where(
+                    Household.telegram_chat_id.in_((-100999, -100998, -100997))
+                )
             )
         await engine.dispose()
 
@@ -185,6 +191,55 @@ async def test_household_currency_can_be_changed(
     assert updated.currency == "UAH"
     with pytest.raises(ValueError, match="unsupported currency"):
         await service.set_currency(household_id=household_id, currency="BTC")
+
+
+@pytest.mark.asyncio
+async def test_ai_usage_is_deduplicated_and_aggregated_per_household(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100997, name="AI usage household"
+        )
+        household_id = household.id
+
+    service = AIUsageService(service_session_factory)
+    text_usage = AIUsageData(
+        model="gpt-6-luna",
+        response_id="resp_usage_test",
+        input_tokens=1000,
+        output_tokens=100,
+    )
+    assert await service.record(
+        household_id=household_id,
+        request_kind="transaction_recognition",
+        usage=text_usage,
+    )
+    assert not await service.record(
+        household_id=household_id,
+        request_kind="transaction_recognition",
+        usage=text_usage,
+    )
+    assert await service.record(
+        household_id=household_id,
+        request_kind="voice_transcription",
+        usage=AIUsageData(
+            model="gpt-transcribe",
+            input_tokens=14,
+            output_tokens=5,
+            audio_input_tokens=14,
+        ),
+        duration_seconds=7,
+    )
+
+    report = await service.report("30d", now=datetime.now(UTC))
+    row = next(item for item in report.rows if item.household_id == household_id)
+
+    assert row.request_count == 2
+    assert row.input_tokens == 1014
+    assert row.output_tokens == 105
+    assert row.audio_input_tokens == 14
+    assert row.estimated_cost_usd == Decimal("0.0006750000")
 
 
 @pytest.mark.asyncio

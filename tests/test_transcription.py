@@ -22,7 +22,18 @@ class FakeProcess:
 
 @pytest.mark.asyncio
 async def test_transcriber_converts_audio_and_calls_openai() -> None:
-    create = AsyncMock(return_value=SimpleNamespace(text="  кава 5 євро  "))
+    create = AsyncMock(
+        return_value=SimpleNamespace(
+            id="transcription_1",
+            model="gpt-transcribe",
+            text="  кава 5 євро  ",
+            usage=SimpleNamespace(
+                input_tokens=14,
+                output_tokens=5,
+                input_token_details=SimpleNamespace(audio_tokens=14),
+            ),
+        )
+    )
     client = SimpleNamespace(
         audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create))
     )
@@ -39,7 +50,9 @@ async def test_transcriber_converts_audio_and_calls_openai() -> None:
         b"wav-bytes",
         "audio/wav",
     )
-    assert result == "кава 5 євро"
+    assert result.text == "кава 5 євро"
+    assert result.usage.response_id == "transcription_1"
+    assert result.usage.audio_input_tokens == 14
 
 
 @pytest.mark.asyncio

@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Protocol
 
 from openai import AsyncOpenAI
+
+from application.services.ai_usage import AIUsageData
 
 
 class VoiceTranscriptionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceTranscription:
+    text: str
+    usage: AIUsageData
+
+
 class VoiceTranscriber(Protocol):
-    async def transcribe(self, audio: bytes) -> str: ...
+    async def transcribe(self, audio: bytes) -> VoiceTranscription: ...
 
 
 class OpenAIVoiceTranscriber:
@@ -26,7 +35,7 @@ class OpenAIVoiceTranscriber:
         self.model = model
         self.conversion_timeout_seconds = conversion_timeout_seconds
 
-    async def transcribe(self, audio: bytes) -> str:
+    async def transcribe(self, audio: bytes) -> VoiceTranscription:
         wav_audio = await self._convert_to_wav(audio)
         try:
             result = await self.client.audio.transcriptions.create(
@@ -39,7 +48,20 @@ class OpenAIVoiceTranscriber:
             )
         except Exception as error:
             raise VoiceTranscriptionError("transcription failed") from error
-        return result.text.strip()
+        usage = getattr(result, "usage", None)
+        input_details = getattr(usage, "input_token_details", None)
+        return VoiceTranscription(
+            text=result.text.strip(),
+            usage=AIUsageData(
+                model=str(getattr(result, "model", self.model)),
+                response_id=getattr(result, "id", None),
+                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                audio_input_tokens=int(
+                    getattr(input_details, "audio_tokens", 0) or 0
+                ),
+            ),
+        )
 
     async def _convert_to_wav(self, audio: bytes) -> bytes:
         try:
@@ -78,4 +100,9 @@ class OpenAIVoiceTranscriber:
         return stdout
 
 
-__all__ = ["OpenAIVoiceTranscriber", "VoiceTranscriber", "VoiceTranscriptionError"]
+__all__ = [
+    "OpenAIVoiceTranscriber",
+    "VoiceTranscriber",
+    "VoiceTranscription",
+    "VoiceTranscriptionError",
+]

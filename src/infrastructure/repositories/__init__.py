@@ -2,6 +2,8 @@
 
 from infrastructure.repositories.repositories import (
     AccessRepository,
+    AIUsageAggregate,
+    AIUsageRepository,
     BudgetRepository,
     CategoryRepository,
     CategoryTotal,
@@ -20,6 +22,8 @@ from infrastructure.repositories.repositories import (
 
 __all__ = [
     "AccessRepository",
+    "AIUsageAggregate",
+    "AIUsageRepository",
     "BudgetRepository",
     "CategoryTotal",
     "CategoryRepository",

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from application.services import VoiceFeatureStatus
+from application.services import AIUsagePeriod, AIUsageReport, VoiceFeatureStatus
 from bot.handlers.access import access_callback, access_start_command
 from bot.keyboards import AccessCallback
+from infrastructure.repositories import AIUsageAggregate
 
 
 def private_start(text: str = "/start") -> SimpleNamespace:
@@ -186,3 +189,67 @@ async def test_admin_cannot_override_voice_env_kill_switch() -> None:
         "Спочатку встановіть VOICE_INPUT_ENABLED=true у .env.",
         show_alert=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_admin_can_view_ai_usage_by_chat() -> None:
+    callback = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    row = AIUsageAggregate(
+        household_id=7,
+        household_name="Сімейний бюджет",
+        request_kind=None,
+        request_count=12,
+        input_tokens=1200,
+        cached_input_tokens=100,
+        output_tokens=240,
+        audio_input_tokens=50,
+        duration_seconds=Decimal("7"),
+        estimated_cost_usd=Decimal("0.001234"),
+        unpriced_requests=0,
+    )
+    report = AIUsageReport(
+        period=AIUsagePeriod(
+            key="month",
+            label="цей місяць",
+            start_at=datetime(2026, 9, 30, 22, tzinfo=UTC),
+            end_at=datetime(2026, 10, 31, 23, tzinfo=UTC),
+        ),
+        rows=(row,),
+    )
+    usage_service = SimpleNamespace(report=AsyncMock(return_value=report))
+
+    await access_callback(
+        callback,
+        AccessCallback(action="ai_usage", value="month"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        ai_usage_service=usage_service,
+        is_access_admin=True,
+    )
+
+    usage_service.report.assert_awaited_once_with("month")
+    text = callback.message.edit_text.await_args.args[0]
+    assert "Сімейний бюджет" in text
+    assert "1 200" in text
+    assert "$0.001234" in text
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_view_ai_usage() -> None:
+    callback = SimpleNamespace(answer=AsyncMock())
+    usage_service = SimpleNamespace(report=AsyncMock())
+
+    await access_callback(
+        callback,
+        AccessCallback(action="ai_usage", value="month"),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        ai_usage_service=usage_service,
+        is_access_admin=False,
+    )
+
+    usage_service.report.assert_not_awaited()

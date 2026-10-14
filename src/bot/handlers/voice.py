@@ -9,6 +9,7 @@ from aiogram.types import Message
 
 from application.rate_limit import AIRateLimiter
 from application.services import (
+    AIUsageService,
     CategoryService,
     ClarificationService,
     PlannedExpenseService,
@@ -16,6 +17,7 @@ from application.services import (
     TransactionService,
     VoiceFeatureService,
 )
+from application.services.ai_usage import VOICE_TRANSCRIPTION
 from bot.handlers.commands import recognize_plain_message
 from infrastructure.database import Household, Member
 from infrastructure.openai import VoiceTranscriber, VoiceTranscriptionError
@@ -37,6 +39,7 @@ async def recognize_voice_message(
     clarification_service: ClarificationService | None = None,
     category_service: CategoryService | None = None,
     planned_expense_service: PlannedExpenseService | None = None,
+    ai_usage_service: AIUsageService | None = None,
     max_message_length: int = 1000,
     max_voice_duration_seconds: int = 60,
     max_voice_file_size_bytes: int = 5_000_000,
@@ -70,7 +73,7 @@ async def recognize_voice_message(
         if len(audio) > max_voice_file_size_bytes:
             await message.answer("🎙 Аудіофайл надто великий. Запишіть коротше повідомлення.")
             return
-        transcript = await voice_transcriber.transcribe(audio)
+        transcription = await voice_transcriber.transcribe(audio)
     except (TelegramAPIError, OSError, VoiceTranscriptionError) as error:
         logger.warning("Voice transcription failed: error_type=%s", type(error).__name__)
         await message.answer(
@@ -84,6 +87,14 @@ async def recognize_voice_message(
             except TelegramAPIError:
                 logger.warning("Could not delete voice processing indicator")
 
+    transcript = transcription.text
+    if ai_usage_service is not None:
+        await ai_usage_service.record(
+            household_id=household.id,
+            request_kind=VOICE_TRANSCRIPTION,
+            usage=transcription.usage,
+            duration_seconds=voice.duration,
+        )
     if not transcript:
         await message.answer("🎙 Не вдалося почути текст. Спробуйте записати ще раз.")
         return

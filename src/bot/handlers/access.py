@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramAPIError
@@ -9,6 +10,8 @@ from aiogram.types import CallbackQuery, Message, Update
 
 from application.services import (
     AccessService,
+    AIUsageReport,
+    AIUsageService,
     TelegramBootstrapService,
     VoiceFeatureService,
     VoiceFeatureStatus,
@@ -18,11 +21,19 @@ from bot.keyboards import (
     AccessCallback,
     access_management_keyboard,
     access_request_keyboard,
+    ai_usage_detail_keyboard,
+    ai_usage_keyboard,
     main_menu_keyboard,
 )
 from infrastructure.database import AccessGrant, AccessRequest, Household
 
 logger = logging.getLogger(__name__)
+
+_AI_KIND_LABELS = {
+    "transaction_recognition": "Текстові команди",
+    "voice_transcription": "Голосові транскрипції",
+    "financial_advice": "Фінансові поради",
+}
 
 
 def _chat_details(message: Message) -> tuple[str, str | None]:
@@ -174,12 +185,105 @@ async def _show_access_menu(
         )
 
 
+def _number(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _cost(value: Decimal) -> str:
+    return f"${value:.6f}"
+
+
+def _ai_usage_text(report: AIUsageReport) -> str:
+    lines = [
+        "🤖 Використання AI",
+        f"Період: {report.period.label}",
+        "",
+        f"Запитів: {_number(report.request_count)}",
+        f"Вхідні токени: {_number(report.input_tokens)}",
+        f"Кешовані вхідні: {_number(report.cached_input_tokens)}",
+        f"Вихідні токени: {_number(report.output_tokens)}",
+    ]
+    if report.audio_input_tokens:
+        lines.append(f"Аудіотокени: {_number(report.audio_input_tokens)}")
+    if report.duration_seconds:
+        lines.append(f"Аудіо: {report.duration_seconds:.0f} с")
+    lines.append(f"Орієнтовна вартість: {_cost(report.estimated_cost_usd)}")
+    if report.unpriced_requests:
+        lines.append(f"⚠️ Без відомого тарифу: {report.unpriced_requests}")
+    if report.rows:
+        lines.extend(["", "За чатами:"])
+        for row in report.rows:
+            lines.append(
+                f"🏠 {row.household_name}: {_number(row.input_tokens)} ↓ · "
+                f"{_number(row.output_tokens)} ↑ · {_cost(row.estimated_cost_usd)}"
+            )
+    else:
+        lines.extend(["", "За цей період AI-запитів ще не було."])
+    return "\n".join(lines)
+
+
+def _ai_usage_detail_text(report: AIUsageReport, household_id: int) -> str:
+    name = report.rows[0].household_name if report.rows else f"Чат {household_id}"
+    lines = [
+        f"🏠 {name}",
+        f"Період: {report.period.label}",
+        "",
+        f"Запитів: {_number(report.request_count)}",
+        f"Вхідні токени: {_number(report.input_tokens)}",
+        f"Кешовані вхідні: {_number(report.cached_input_tokens)}",
+        f"Вихідні токени: {_number(report.output_tokens)}",
+        f"Орієнтовна вартість: {_cost(report.estimated_cost_usd)}",
+    ]
+    if report.audio_input_tokens:
+        lines.append(f"Аудіотокени: {_number(report.audio_input_tokens)}")
+    if report.duration_seconds:
+        lines.append(f"Тривалість аудіо: {report.duration_seconds:.0f} с")
+    if report.rows:
+        lines.extend(["", "За типами:"])
+        for row in report.rows:
+            label = _AI_KIND_LABELS.get(row.request_kind or "", row.request_kind or "Інше")
+            lines.append(
+                f"• {label}: {row.request_count} зап. · {_cost(row.estimated_cost_usd)}"
+            )
+    if report.unpriced_requests:
+        lines.extend(
+            ["", f"⚠️ {report.unpriced_requests} запитів не мають налаштованого тарифу."]
+        )
+    return "\n".join(lines)
+
+
+async def _show_ai_usage(
+    callback: CallbackQuery, service: AIUsageService, period_key: str
+) -> None:
+    report = await service.report(period_key)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            _ai_usage_text(report),
+            reply_markup=ai_usage_keyboard(report.period.key, report.rows),
+        )
+
+
+async def _show_ai_usage_detail(
+    callback: CallbackQuery,
+    service: AIUsageService,
+    period_key: str,
+    household_id: int,
+) -> None:
+    report = await service.report(period_key, household_id=household_id, by_kind=True)
+    if callback.message is not None:
+        await callback.message.edit_text(
+            _ai_usage_detail_text(report, household_id),
+            reply_markup=ai_usage_detail_keyboard(report.period.key),
+        )
+
+
 async def access_callback(
     callback: CallbackQuery,
     callback_data: AccessCallback,
     bot: Bot,
     access_service: AccessService,
     voice_feature_service: VoiceFeatureService | None = None,
+    ai_usage_service: AIUsageService | None = None,
     is_access_admin: bool = False,
 ) -> None:
     if not is_access_admin:
@@ -188,6 +292,28 @@ async def access_callback(
     action, value = callback_data.action, callback_data.value
     if action == "menu":
         await _show_access_menu(callback, access_service, voice_feature_service)
+        await callback.answer()
+        return
+    if action == "ai_usage":
+        if ai_usage_service is None:
+            await callback.answer("Облік AI-витрат недоступний.", show_alert=True)
+            return
+        await _show_ai_usage(callback, ai_usage_service, value)
+        await callback.answer()
+        return
+    if action == "ai_chat":
+        if ai_usage_service is None:
+            await callback.answer("Облік AI-витрат недоступний.", show_alert=True)
+            return
+        try:
+            period_key, raw_household_id = value.rsplit(".", maxsplit=1)
+            household_id = int(raw_household_id)
+        except ValueError:
+            await callback.answer("Некоректний чат.", show_alert=True)
+            return
+        await _show_ai_usage_detail(
+            callback, ai_usage_service, period_key, household_id
+        )
         await callback.answer()
         return
     if action == "voice_toggle":

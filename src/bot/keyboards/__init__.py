@@ -5,6 +5,8 @@ from bot.keyboards.access import (
     access_management_keyboard,
     access_menu_button,
     access_request_keyboard,
+    ai_usage_detail_keyboard,
+    ai_usage_keyboard,
 )
 from bot.keyboards.menu import (
     CategoryMenuCallback,
@@ -46,6 +48,8 @@ from bot.keyboards.transactions import (
 
 __all__ = [
     "AccessCallback",
+    "ai_usage_detail_keyboard",
+    "ai_usage_keyboard",
     "CategoryMenuCallback",
     "MenuCallback",
     "SettingsMenuCallback",

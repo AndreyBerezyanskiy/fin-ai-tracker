@@ -21,6 +21,7 @@ from infrastructure.database.models import (
     AccessGrant,
     AccessInvitation,
     AccessRequest,
+    AIUsageEvent,
     Budget,
     Category,
     FeatureFlag,
@@ -51,6 +52,21 @@ class CategoryTotal:
     code: str
     type: TransactionType
     amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class AIUsageAggregate:
+    household_id: int
+    household_name: str
+    request_kind: str | None
+    request_count: int
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    audio_input_tokens: int
+    duration_seconds: Decimal
+    estimated_cost_usd: Decimal
+    unpriced_requests: int
 
 
 class AccessRepository:
@@ -139,6 +155,7 @@ class AccessRepository:
         await self.session.flush()
         return invitation
 
+
     async def get_invitation_for_update(self, token_digest: str) -> AccessInvitation | None:
         return await self.session.scalar(
             select(AccessInvitation)
@@ -195,6 +212,107 @@ class AccessRepository:
         return await self.session.scalar(
             select(AccessRequest).where(AccessRequest.id == request_id).with_for_update()
         )
+
+
+class AIUsageRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def record(
+        self,
+        *,
+        household_id: int,
+        request_kind: str,
+        model: str,
+        service_tier: str | None,
+        response_id: str | None,
+        input_tokens: int,
+        cached_input_tokens: int,
+        output_tokens: int,
+        audio_input_tokens: int,
+        duration_seconds: Decimal | None,
+        input_price_per_million: Decimal | None,
+        cached_input_price_per_million: Decimal | None,
+        output_price_per_million: Decimal | None,
+        price_per_minute: Decimal | None,
+        estimated_cost_usd: Decimal | None,
+    ) -> bool:
+        statement = (
+            insert(AIUsageEvent)
+            .values(
+                household_id=household_id,
+                request_kind=request_kind,
+                model=model,
+                service_tier=service_tier,
+                response_id=response_id,
+                input_tokens=input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                output_tokens=output_tokens,
+                audio_input_tokens=audio_input_tokens,
+                duration_seconds=duration_seconds,
+                input_price_per_million=input_price_per_million,
+                cached_input_price_per_million=cached_input_price_per_million,
+                output_price_per_million=output_price_per_million,
+                price_per_minute=price_per_minute,
+                estimated_cost_usd=estimated_cost_usd,
+            )
+            .on_conflict_do_nothing(constraint="uq_ai_usage_events_response_id")
+            .returning(AIUsageEvent.id)
+        )
+        return (await self.session.scalar(statement)) is not None
+
+    async def aggregate(
+        self,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        household_id: int | None = None,
+        by_kind: bool = False,
+    ) -> list[AIUsageAggregate]:
+        dimensions: list[Any] = [Household.id, Household.name]
+        if by_kind:
+            dimensions.append(AIUsageEvent.request_kind)
+        statement = (
+            select(
+                *dimensions,
+                func.count(AIUsageEvent.id),
+                func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
+                func.coalesce(func.sum(AIUsageEvent.cached_input_tokens), 0),
+                func.coalesce(func.sum(AIUsageEvent.output_tokens), 0),
+                func.coalesce(func.sum(AIUsageEvent.audio_input_tokens), 0),
+                func.coalesce(func.sum(AIUsageEvent.duration_seconds), 0),
+                func.coalesce(func.sum(AIUsageEvent.estimated_cost_usd), 0),
+                func.count(AIUsageEvent.id).filter(
+                    AIUsageEvent.estimated_cost_usd.is_(None)
+                ),
+            )
+            .join(Household, Household.id == AIUsageEvent.household_id)
+            .where(
+                AIUsageEvent.created_at >= start_at,
+                AIUsageEvent.created_at < end_at,
+            )
+        )
+        if household_id is not None:
+            statement = statement.where(AIUsageEvent.household_id == household_id)
+        statement = statement.group_by(*dimensions).order_by(Household.name, Household.id)
+        rows = (await self.session.execute(statement)).all()
+        offset = 1 if by_kind else 0
+        return [
+            AIUsageAggregate(
+                household_id=row[0],
+                household_name=row[1],
+                request_kind=row[2] if by_kind else None,
+                request_count=row[2 + offset],
+                input_tokens=row[3 + offset],
+                cached_input_tokens=row[4 + offset],
+                output_tokens=row[5 + offset],
+                audio_input_tokens=row[6 + offset],
+                duration_seconds=row[7 + offset],
+                estimated_cost_usd=row[8 + offset],
+                unpriced_requests=row[9 + offset],
+            )
+            for row in rows
+        ]
 
 
 class FeatureFlagRepository:

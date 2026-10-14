@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from application.services.voice import VoiceFeatureStatus
 from infrastructure.database import AccessGrant, AccessRequest
+from infrastructure.repositories import AIUsageAggregate
 
 
 class AccessCallback(CallbackData, prefix="access"):
@@ -76,6 +77,14 @@ def access_management_keyboard(
                 )
             ]
         )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🤖 Використання AI",
+                callback_data=AccessCallback(action="ai_usage", value="month").pack(),
+            )
+        ]
+    )
     for request in list(requests)[:20]:
         rows.append(
             [
@@ -115,8 +124,76 @@ def access_management_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def ai_usage_keyboard(
+    period_key: str,
+    households: Iterable[AIUsageAggregate] = (),
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Сьогодні",
+                callback_data=AccessCallback(action="ai_usage", value="today").pack(),
+            ),
+            InlineKeyboardButton(
+                text="Цей місяць",
+                callback_data=AccessCallback(action="ai_usage", value="month").pack(),
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Минулий місяць",
+                callback_data=AccessCallback(
+                    action="ai_usage", value="previous_month"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="30 днів",
+                callback_data=AccessCallback(action="ai_usage", value="30d").pack(),
+            ),
+        ],
+    ]
+    for household in list(households)[:20]:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🏠 {household.household_name[:28]}",
+                    callback_data=AccessCallback(
+                        action="ai_chat",
+                        value=f"{period_key}.{household.household_id}",
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← До керування доступом",
+                callback_data=AccessCallback(action="menu", value="0").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def ai_usage_detail_keyboard(period_key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="← До всіх чатів",
+                    callback_data=AccessCallback(
+                        action="ai_usage", value=period_key
+                    ).pack(),
+                )
+            ]
+        ]
+    )
+
+
 __all__ = [
     "AccessCallback",
+    "ai_usage_detail_keyboard",
+    "ai_usage_keyboard",
     "access_management_keyboard",
     "access_menu_button",
     "access_request_keyboard",

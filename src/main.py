@@ -13,6 +13,7 @@ from application.report_scheduler import ReportScheduler
 from application.services import (
     AccessService,
     AdviceService,
+    AIUsageService,
     AutomaticReportService,
     BudgetService,
     CategoryService,
@@ -101,6 +102,8 @@ def create_dispatcher(
         dispatcher["transaction_service"] = TransactionService(session_factory)
         dispatcher["planned_expense_service"] = PlannedExpenseService(session_factory)
         dispatcher["clarification_service"] = ClarificationService(session_factory)
+        ai_usage_service = AIUsageService(session_factory)
+        dispatcher["ai_usage_service"] = ai_usage_service
         openai_client = AsyncOpenAI(
             api_key=settings.openai_api_key.get_secret_value(),
             timeout=settings.openai_timeout_seconds,
@@ -110,6 +113,7 @@ def create_dispatcher(
             report_service,
             budget_service,
             OpenAIAdviceGenerator(openai_client, model=settings.openai_model),
+            ai_usage_service,
         )
         dispatcher["advice_service"] = advice_service
         dispatcher["automatic_report_service"] = AutomaticReportService(
@@ -121,6 +125,7 @@ def create_dispatcher(
         dispatcher["transaction_recognition_service"] = TransactionRecognitionService(
             session_factory,
             OpenAITransactionRecognizer(openai_client, model=settings.openai_model),
+            ai_usage_service,
         )
         dispatcher["ai_rate_limiter"] = AIRateLimiter(settings.ai_requests_per_minute)
         dispatcher["voice_rate_limiter"] = AIRateLimiter(settings.voice_requests_per_minute)

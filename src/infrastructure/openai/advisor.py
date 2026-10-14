@@ -7,7 +7,8 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from application.services.advice import AdviceReport
+from application.services.advice import AdviceGeneration, AdviceReport
+from application.services.ai_usage import AIUsageData
 from domain.models import AIAdviceResponse
 
 SYSTEM_PROMPT = """Сформулюй українською від однієї до трьох коротких, цікавих і практичних
@@ -38,7 +39,9 @@ _FORBIDDEN_TERMS = (
 
 
 class InvalidAdviceError(ValueError):
-    pass
+    def __init__(self, message: str, *, usage: AIUsageData | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 class OpenAIAdviceGenerator:
@@ -46,7 +49,7 @@ class OpenAIAdviceGenerator:
         self.client = client
         self.model = model
 
-    async def generate(self, report: AdviceReport) -> tuple[str, ...]:
+    async def generate(self, report: AdviceReport) -> AdviceGeneration:
         payload = self._payload(report)
         response = await self.client.responses.parse(
             model=self.model,
@@ -56,12 +59,31 @@ class OpenAIAdviceGenerator:
             reasoning={"effort": "low"},
             store=False,
         )
+        usage = getattr(response, "usage", None)
+        input_details = getattr(usage, "input_tokens_details", None)
+        usage_data = AIUsageData(
+            model=str(getattr(response, "model", self.model)),
+            service_tier=getattr(response, "service_tier", None),
+            response_id=getattr(response, "id", None),
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            cached_input_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        )
         parsed = response.output_parsed
         if parsed is None:
-            raise InvalidAdviceError("OpenAI returned no structured advice")
+            raise InvalidAdviceError(
+                "OpenAI returned no structured advice", usage=usage_data
+            )
         observations = tuple(parsed.observations)
-        self._validate(observations, payload)
-        return observations
+        try:
+            self._validate(observations, payload)
+        except InvalidAdviceError as error:
+            error.usage = usage_data
+            raise
+        return AdviceGeneration(
+            observations=observations,
+            usage=usage_data,
+        )
 
     @staticmethod
     def _decimal(value: Decimal | None) -> str | None:

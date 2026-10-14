@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol
 
+from application.services.ai_usage import FINANCIAL_ADVICE, AIUsageData, AIUsageService
 from application.services.budgets import BudgetService
 from application.services.telegram import ReportService
 
@@ -32,8 +33,14 @@ class AdviceReport:
     days_remaining: int
 
 
+@dataclass(frozen=True, slots=True)
+class AdviceGeneration:
+    observations: tuple[str, ...]
+    usage: AIUsageData
+
+
 class AdviceGenerator(Protocol):
-    async def generate(self, report: AdviceReport) -> tuple[str, ...]: ...
+    async def generate(self, report: AdviceReport) -> AdviceGeneration: ...
 
 
 class AdviceService:
@@ -44,10 +51,12 @@ class AdviceService:
         report_service: ReportService,
         budget_service: BudgetService,
         generator: AdviceGenerator,
+        ai_usage_service: AIUsageService | None = None,
     ) -> None:
         self.report_service = report_service
         self.budget_service = budget_service
         self.generator = generator
+        self.ai_usage_service = ai_usage_service
 
     async def generate(self, *, household_id: int, currency: str, today: date) -> tuple[str, ...]:
         start_date = today.replace(day=1)
@@ -116,11 +125,31 @@ class AdviceService:
             expense_change_percent=expense_change_percent,
             days_remaining=budget_status.days_remaining,
         )
-        return await self.generator.generate(report)
+        try:
+            generation = await self.generator.generate(report)
+        except Exception as error:
+            failed_usage = getattr(error, "usage", None)
+            if self.ai_usage_service is not None and isinstance(
+                failed_usage, AIUsageData
+            ):
+                await self.ai_usage_service.record(
+                    household_id=household_id,
+                    request_kind=FINANCIAL_ADVICE,
+                    usage=failed_usage,
+                )
+            raise
+        if self.ai_usage_service is not None:
+            await self.ai_usage_service.record(
+                household_id=household_id,
+                request_kind=FINANCIAL_ADVICE,
+                usage=generation.usage,
+            )
+        return generation.observations
 
 
 __all__ = [
     "AdviceCategory",
+    "AdviceGeneration",
     "AdviceGenerator",
     "AdviceReport",
     "AdviceService",

@@ -431,8 +431,13 @@ class OpenAITransactionRecognizer:
         metadata: dict[str, Any] = {
             "response_id": getattr(response, "id", None),
             "model": getattr(response, "model", None),
+            "service_tier": getattr(response, "service_tier", None),
         }
         if usage is not None:
             metadata["input_tokens"] = getattr(usage, "input_tokens", None)
             metadata["output_tokens"] = getattr(usage, "output_tokens", None)
+            input_details = getattr(usage, "input_tokens_details", None)
+            metadata["cached_input_tokens"] = getattr(
+                input_details, "cached_tokens", None
+            )
         return {key: value for key, value in metadata.items() if value is not None}

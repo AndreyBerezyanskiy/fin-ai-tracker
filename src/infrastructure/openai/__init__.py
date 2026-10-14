@@ -5,6 +5,7 @@ from infrastructure.openai.recognizer import OpenAITransactionRecognizer
 from infrastructure.openai.transcriber import (
     OpenAIVoiceTranscriber,
     VoiceTranscriber,
+    VoiceTranscription,
     VoiceTranscriptionError,
 )
 
@@ -14,5 +15,6 @@ __all__ = [
     "OpenAITransactionRecognizer",
     "OpenAIVoiceTranscriber",
     "VoiceTranscriber",
+    "VoiceTranscription",
     "VoiceTranscriptionError",
 ]

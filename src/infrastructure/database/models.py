@@ -232,6 +232,49 @@ class FeatureFlag(TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
 
+class AIUsageEvent(TimestampMixin, Base):
+    __tablename__ = "ai_usage_events"
+    __table_args__ = (
+        Index("ix_ai_usage_events_created_at", "created_at"),
+        UniqueConstraint("response_id", name="uq_ai_usage_events_response_id"),
+        CheckConstraint("input_tokens >= 0", name="ai_usage_input_tokens_non_negative"),
+        CheckConstraint(
+            "cached_input_tokens >= 0", name="ai_usage_cached_tokens_non_negative"
+        ),
+        CheckConstraint("output_tokens >= 0", name="ai_usage_output_tokens_non_negative"),
+        CheckConstraint(
+            "audio_input_tokens >= 0", name="ai_usage_audio_tokens_non_negative"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    request_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    service_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    audio_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    duration_seconds: Mapped[Decimal | None] = mapped_column(Numeric(12, 3), nullable=True)
+    input_price_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    cached_input_price_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    output_price_per_million: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 8), nullable=True
+    )
+    price_per_minute: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 10), nullable=True
+    )
+
+
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (Index("uq_categories_household_code", "household_id", "code", unique=True),)

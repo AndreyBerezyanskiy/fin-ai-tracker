@@ -6,10 +6,22 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from application.rate_limit import AIRateLimiter
-from application.services import VoiceFeatureStatus
+from application.services import AIUsageData, VoiceFeatureStatus
 from bot.handlers.voice import recognize_voice_message
 from infrastructure.database import Household, Member
-from infrastructure.openai import VoiceTranscriptionError
+from infrastructure.openai import VoiceTranscription, VoiceTranscriptionError
+
+
+def transcription(text: str) -> VoiceTranscription:
+    return VoiceTranscription(
+        text=text,
+        usage=AIUsageData(
+            model="gpt-transcribe",
+            input_tokens=14,
+            output_tokens=5,
+            audio_input_tokens=14,
+        ),
+    )
 
 
 def voice_message(*, duration: int = 8, file_size: int | None = 1000) -> SimpleNamespace:
@@ -41,10 +53,13 @@ async def test_voice_message_is_transcribed_and_sent_to_shared_text_flow() -> No
     bot = SimpleNamespace(
         download=AsyncMock(side_effect=lambda _file_id, destination: destination.write(b"ogg"))
     )
-    transcriber = SimpleNamespace(transcribe=AsyncMock(return_value="кава 5 євро"))
+    transcriber = SimpleNamespace(
+        transcribe=AsyncMock(return_value=transcription("кава 5 євро"))
+    )
     feature = SimpleNamespace(
         status=AsyncMock(return_value=VoiceFeatureStatus(True, True))
     )
+    usage_service = SimpleNamespace(record=AsyncMock())
 
     with patch("bot.handlers.voice.recognize_plain_message", new=AsyncMock()) as recognize:
         await recognize_voice_message(
@@ -57,11 +72,14 @@ async def test_voice_message_is_transcribed_and_sent_to_shared_text_flow() -> No
             SimpleNamespace(),
             SimpleNamespace(),
             AIRateLimiter(5),
+            ai_usage_service=usage_service,
         )
 
     transcriber.transcribe.assert_awaited_once_with(b"ogg")
     assert "кава 5 євро" in message.answer.await_args.args[0]
     assert recognize.await_args.kwargs["recognized_text"] == "кава 5 євро"
+    usage_service.record.assert_awaited_once()
+    assert usage_service.record.await_args.kwargs["duration_seconds"] == 8
     message.reply.return_value.delete.assert_awaited_once()
 
 
@@ -221,7 +239,9 @@ async def test_invalid_transcript_does_not_reach_shared_text_flow(
     bot = SimpleNamespace(
         download=AsyncMock(side_effect=lambda _file_id, destination: destination.write(b"ogg"))
     )
-    transcriber = SimpleNamespace(transcribe=AsyncMock(return_value=transcript))
+    transcriber = SimpleNamespace(
+        transcribe=AsyncMock(return_value=transcription(transcript))
+    )
     feature = SimpleNamespace(
         status=AsyncMock(return_value=VoiceFeatureStatus(True, True))
     )

@@ -1,7 +1,18 @@
 """Application services."""
 
 from application.services.access import AccessService, InvitationLink, RedemptionResult
-from application.services.advice import AdviceCategory, AdviceReport, AdviceService
+from application.services.advice import (
+    AdviceCategory,
+    AdviceGeneration,
+    AdviceReport,
+    AdviceService,
+)
+from application.services.ai_usage import (
+    AIUsageData,
+    AIUsagePeriod,
+    AIUsageReport,
+    AIUsageService,
+)
 from application.services.automatic_reports import AutomaticReportService
 from application.services.budgets import BudgetService, BudgetStatus, CategoryBudgetStatus
 from application.services.categories import CategoryService, CategoryStatistic
@@ -22,7 +33,12 @@ from application.services.voice import VoiceFeatureService, VoiceFeatureStatus
 
 __all__ = [
     "AccessService",
+    "AIUsageData",
+    "AIUsagePeriod",
+    "AIUsageReport",
+    "AIUsageService",
     "AdviceCategory",
+    "AdviceGeneration",
     "AdviceReport",
     "AdviceService",
     "AutomaticReportService",

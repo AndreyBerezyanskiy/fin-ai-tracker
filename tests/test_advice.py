@@ -10,8 +10,10 @@ import pytest
 
 from application.services import (
     AdviceCategory,
+    AdviceGeneration,
     AdviceReport,
     AdviceService,
+    AIUsageData,
     BudgetStatus,
     CategoryBudgetStatus,
     MonthReport,
@@ -48,7 +50,14 @@ def advice_report() -> AdviceReport:
 def generator_with(observations: list[str]) -> tuple[OpenAIAdviceGenerator, AsyncMock]:
     parse = AsyncMock(
         return_value=SimpleNamespace(
+            id="resp_advice",
+            model="gpt-6-luna",
             output_parsed=AIAdviceResponse(observations=observations),
+            usage=SimpleNamespace(
+                input_tokens=120,
+                output_tokens=30,
+                input_tokens_details=SimpleNamespace(cached_tokens=20),
+            ),
         )
     )
     client = SimpleNamespace(responses=SimpleNamespace(parse=parse))
@@ -64,9 +73,11 @@ async def test_advice_uses_only_aggregate_report_and_structured_output() -> None
         ]
     )
 
-    observations = await generator.generate(advice_report())
+    generation = await generator.generate(advice_report())
 
-    assert len(observations) == 2
+    assert len(generation.observations) == 2
+    assert generation.usage.input_tokens == 120
+    assert generation.usage.cached_input_tokens == 20
     request = parse.await_args.kwargs
     assert request["text_format"] is AIAdviceResponse
     assert request["store"] is False
@@ -91,8 +102,11 @@ async def test_advice_uses_only_aggregate_report_and_structured_output() -> None
 async def test_advice_rejects_numbers_absent_from_report() -> None:
     generator, _parse = generator_with(["Можна заощадити приблизно €110."])
 
-    with pytest.raises(InvalidAdviceError, match="number absent"):
+    with pytest.raises(InvalidAdviceError, match="number absent") as raised:
         await generator.generate(advice_report())
+
+    assert raised.value.usage is not None
+    assert raised.value.usage.response_id == "resp_advice"
 
 
 @pytest.mark.asyncio
@@ -134,8 +148,16 @@ async def test_advice_service_builds_deterministic_report() -> None:
             )
         )
     )
-    advice_generator = SimpleNamespace(generate=AsyncMock(return_value=("Спостереження",)))
-    service = AdviceService(report_service, budget_service, advice_generator)
+    usage = AIUsageData(model="gpt-6-luna", response_id="resp_advice")
+    advice_generator = SimpleNamespace(
+        generate=AsyncMock(
+            return_value=AdviceGeneration(observations=("Спостереження",), usage=usage)
+        )
+    )
+    usage_service = SimpleNamespace(record=AsyncMock())
+    service = AdviceService(
+        report_service, budget_service, advice_generator, usage_service
+    )
 
     result = await service.generate(household_id=7, currency="EUR", today=date(2026, 10, 19))
 
@@ -146,6 +168,8 @@ async def test_advice_service_builds_deterministic_report() -> None:
     assert aggregate.expense_change_percent.quantize(Decimal("0.01")) == Decimal("-11.76")
     assert aggregate.top_categories[0].budget == Decimal("600.00")
     assert aggregate.top_categories[1].budget is None
+    usage_service.record.assert_awaited_once()
+    assert usage_service.record.await_args.kwargs["household_id"] == 7
 
 
 @pytest.mark.asyncio
