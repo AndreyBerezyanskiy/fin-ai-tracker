@@ -316,7 +316,7 @@ async def category_menu_callback(
         status = "активна" if category.is_active else "прихована"
         await _edit(
             callback,
-            f"{category.name}\nКод: {category.code}\nСтатус: {status}",
+            f"{category.name}\nСтатус: {status}",
             reply_markup=category_detail_keyboard(category),
         )
         return

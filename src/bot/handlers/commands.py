@@ -1056,10 +1056,7 @@ async def recognize_plain_message(
                     return
                 await _resolve_clarification(
                     message,
-                    answer=(
-                        f"Створено й обрано категорію «{category.name}» "
-                        f"з кодом {category.code}."
-                    ),
+                    answer=f"Створено й обрано категорію «{category.name}».",
                     clarification=clarification,
                     household=household,
                     member=member,
@@ -1503,7 +1500,7 @@ async def category_choice_callback(
     await callback.answer()
     await _resolve_clarification(
         callback.message,
-        answer=f"Обрана категорія «{category.name}» з кодом {category.code}.",
+        answer=f"Обрана категорія «{category.name}».",
         clarification=clarification,
         household=household,
         member=member,
@@ -1747,7 +1744,7 @@ async def categories_command(
     }
     for category in categories:
         status = "✅" if category.is_active else "⏸"
-        sections[category.type].append(f"{status} {category.code} — {category.name}")
+        sections[category.type].append(f"{status} {category.name}")
     for lines in sections.values():
         if len(lines) == 1:
             lines.append("Категорій ще немає.")
@@ -1774,7 +1771,7 @@ async def category_add_command(
         transaction_type=type_aliases[parts[0].lower()],
         name=parts[1].strip()[:255],
     )
-    await message.answer(f"Категорію створено: {category.code} — {category.name}")
+    await message.answer(f"Категорію створено: {category.name}")
 
 
 async def category_rename_command(
@@ -1794,7 +1791,7 @@ async def category_rename_command(
     if category is None:
         await message.answer("Категорію з таким кодом не знайдено.")
         return
-    await message.answer(f"Категорію перейменовано: {category.code} — {category.name}")
+    await message.answer(f"Категорію перейменовано: {category.name}")
 
 
 async def _set_category_active(

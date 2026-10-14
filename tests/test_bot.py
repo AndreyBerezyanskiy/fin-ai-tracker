@@ -1185,14 +1185,18 @@ async def test_category_commands_list_and_add_categories() -> None:
     await category_add_command(add_message, household, service)
 
     listed = listed_message.answer.await_args.args[0]
-    assert "✅ groceries — Продукти" in listed
-    assert "⏸ salary — Зарплата" in listed
+    assert "✅ Продукти" in listed
+    assert "⏸ Зарплата" in listed
+    assert "groceries" not in listed
+    assert "salary" not in listed
     service.add.assert_awaited_once_with(
         household_id=1,
         transaction_type=TransactionType.EXPENSE,
         name="Домашні тварини",
     )
-    assert "custom_12345678" in add_message.answer.await_args.args[0]
+    created_text = add_message.answer.await_args.args[0]
+    assert created_text == "Категорію створено: Домашні тварини"
+    assert "custom_12345678" not in created_text
 
 
 @pytest.mark.asyncio

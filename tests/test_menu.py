@@ -302,6 +302,35 @@ async def test_category_template_can_be_added_from_menu() -> None:
 
 
 @pytest.mark.asyncio
+async def test_category_details_do_not_expose_internal_code() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    category = Category(
+        id=20,
+        household_id=1,
+        code="custom_12345678",
+        name="Мобільний зв’язок та інтернет",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    service = SimpleNamespace(list=AsyncMock(return_value=(category,)))
+
+    await category_menu_callback(
+        callback,
+        CategoryMenuCallback(action="view", value=category.code),
+        Household(id=1, telegram_chat_id=-100123, name="Сім’я"),
+        service,
+        SimpleNamespace(),
+    )
+
+    text = callback.message.edit_text.await_args.args[0]
+    assert text == "Мобільний зв’язок та інтернет\nСтатус: активна"
+    assert category.code not in text
+
+
+@pytest.mark.asyncio
 async def test_used_category_is_not_deleted_from_menu() -> None:
     callback = SimpleNamespace(
         message=SimpleNamespace(edit_text=AsyncMock()),
