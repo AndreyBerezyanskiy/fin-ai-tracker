@@ -58,6 +58,7 @@ from infrastructure.repositories import (
     CategoryRepository,
     HouseholdRepository,
     MemberRepository,
+    PlannedExpenseRepository,
     ProcessedTelegramUpdateRepository,
     ReportDeliveryRepository,
     TransactionRepository,
@@ -939,6 +940,100 @@ async def test_pending_batch_confirm_last_and_undo_flow(
     assert undone.status is TransactionStatus.CANCELLED
     assert len(await service.list_recent(household_id=household.id)) == 1
     assert await service.confirmed_balance(household_id=household.id) == Decimal("-18.00")
+
+
+@pytest.mark.asyncio
+async def test_export_queries_are_limited_to_household_period_and_currency(
+    session: AsyncSession,
+) -> None:
+    households = HouseholdRepository(session)
+    members = MemberRepository(session)
+    transactions = TransactionRepository(session)
+    plans = PlannedExpenseRepository(session)
+    first = await households.get_or_create(telegram_chat_id=-100140, name="Перша сім’я")
+    second = await households.get_or_create(telegram_chat_id=-100141, name="Друга сім’я")
+    first_member = await members.get_or_create(
+        household_id=first.id, telegram_user_id=140, display_name="Андрій"
+    )
+    second_member = await members.get_or_create(
+        household_id=second.id, telegram_user_id=141, display_name="Олена"
+    )
+    first_category = (
+        await add_template_categories(session, first.id, "groceries")
+    )["groceries"]
+    second_category = (
+        await add_template_categories(session, second.id, "groceries")
+    )["groceries"]
+
+    first_transaction = await transactions.create_idempotent(
+        household_id=first.id,
+        member_id=first_member.id,
+        category_id=first_category.id,
+        transaction_type=TransactionType.EXPENSE,
+        amount=Decimal("42.00"),
+        currency="EUR",
+        description="Продукти",
+        transaction_date=date(2026, 10, 12),
+        original_text="продукти 42",
+        telegram_chat_id=first.telegram_chat_id,
+        telegram_message_id=1401,
+    )
+    await transactions.set_status(first_transaction.transaction, TransactionStatus.CONFIRMED)
+    second_transaction = await transactions.create_idempotent(
+        household_id=second.id,
+        member_id=second_member.id,
+        category_id=second_category.id,
+        transaction_type=TransactionType.EXPENSE,
+        amount=Decimal("500.00"),
+        currency="EUR",
+        description="Чужі витрати",
+        transaction_date=date(2026, 10, 12),
+        original_text="чужі витрати 500",
+        telegram_chat_id=second.telegram_chat_id,
+        telegram_message_id=1411,
+    )
+    await transactions.set_status(second_transaction.transaction, TransactionStatus.CONFIRMED)
+    await plans.create(
+        household_id=first.id,
+        member_id=first_member.id,
+        category_id=first_category.id,
+        amount=Decimal("100.00"),
+        currency="EUR",
+        description="Страхування",
+        due_date=date(2026, 10, 25),
+        recurrence=None,
+        original_text="страхування 100",
+        telegram_chat_id=first.telegram_chat_id,
+        telegram_message_id=1402,
+        status=PlannedExpenseStatus.SCHEDULED,
+    )
+
+    exported = await transactions.list_confirmed_for_period(
+        household_id=first.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+        limit=100,
+    )
+    exported_plans = await plans.list_for_period(
+        household_id=first.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+    )
+
+    assert [(item.description, item.category.name) for item in exported] == [
+        ("Продукти", "Продукти")
+    ]
+    assert exported[0].beneficiary.display_name == "Андрій"
+    assert [item.description for item in exported_plans] == ["Страхування"]
+    assert await transactions.oldest_confirmed_date(first.id) == date(2026, 10, 12)
+    assert await transactions.type_totals(
+        household_id=first.id,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 11, 1),
+        currency="EUR",
+    ) == {TransactionType.EXPENSE: Decimal("42.00")}
 
 
 @pytest.mark.asyncio

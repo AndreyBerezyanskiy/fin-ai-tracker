@@ -11,6 +11,7 @@ from bot.handlers.menu import (
     add_category_name,
     category_menu_callback,
     expense_chart_callback,
+    export_callback,
     menu_callback,
     menu_command,
     settings_menu_callback,
@@ -18,10 +19,13 @@ from bot.handlers.menu import (
 from bot.keyboards import (
     CategoryMenuCallback,
     ExpenseChartCallback,
+    ExportCallback,
     MenuCallback,
     SettingsMenuCallback,
     currency_keyboard,
     main_menu_keyboard,
+    statistics_result_keyboard,
+    stats_menu_keyboard,
 )
 from domain.category_templates import CategoryTemplate
 from domain.enums import PlannedExpenseStatus, TransactionType
@@ -65,6 +69,30 @@ def test_currency_keyboard_lists_supported_currencies_and_marks_current() -> Non
     assert len(labels) == 4  # Three currencies and the back button.
 
 
+def test_statistics_keyboards_offer_excel_only_for_full_months() -> None:
+    stats_labels = [
+        button.text for row in stats_menu_keyboard().inline_keyboard for button in row
+    ]
+    month_labels = [
+        button.text
+        for row in statistics_result_keyboard(
+            start_date="2026-10-01", end_date="2026-11-01"
+        ).inline_keyboard
+        for button in row
+    ]
+    day_labels = [
+        button.text
+        for row in statistics_result_keyboard(
+            start_date="2026-10-14", end_date="2026-10-15"
+        ).inline_keyboard
+        for button in row
+    ]
+
+    assert "📥 Excel-звіт" in stats_labels
+    assert "📥 Завантажити Excel" in month_labels
+    assert "📥 Завантажити Excel" not in day_labels
+
+
 @pytest.mark.asyncio
 async def test_planned_expenses_are_available_from_main_menu() -> None:
     callback = SimpleNamespace(
@@ -76,6 +104,7 @@ async def test_planned_expenses_are_available_from_main_menu() -> None:
         telegram_chat_id=-100123,
         name="Сім’я",
         currency="EUR",
+        timezone="Europe/Paris",
     )
     plan = SimpleNamespace(
         id=42,
@@ -255,6 +284,90 @@ async def test_expense_chart_callback_reports_empty_period() -> None:
         "За цей період немає витрат.", show_alert=True
     )
     callback.message.answer_photo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_export_menu_and_range_keep_selected_start_month() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    service = SimpleNamespace(
+        available_years=AsyncMock(return_value=(2026, 2025, 2024)),
+    )
+
+    await export_callback(
+        callback,
+        ExportCallback(action="menu", value="-"),
+        household,
+        service,
+    )
+    labels = [
+        button.text
+        for row in callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "Проміжок місяців" in labels
+
+    await export_callback(
+        callback,
+        ExportCallback(action="range_start", value="2025-03"),
+        household,
+        service,
+    )
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    callback_values = [
+        button.callback_data for row in keyboard.inline_keyboard for button in row
+    ]
+    assert any("2025-03_2026" in value for value in callback_values)
+    assert all("_2024" not in value for value in callback_values)
+
+
+@pytest.mark.asyncio
+async def test_export_callback_sends_excel_document() -> None:
+    message = SimpleNamespace(answer_document=AsyncMock())
+    callback = SimpleNamespace(message=message, answer=AsyncMock())
+    period = SimpleNamespace(label="Жовтень 2026")
+    service = SimpleNamespace(
+        create=AsyncMock(
+            return_value=SimpleNamespace(
+                content=b"xlsx-data",
+                filename="family-budget-2026-10.xlsx",
+                report=SimpleNamespace(period=period),
+            )
+        )
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+
+    await export_callback(
+        callback,
+        ExportCallback(action="generate", value="2026-10_2026-10"),
+        household,
+        service,
+    )
+
+    service.create.assert_awaited_once()
+    document = message.answer_document.await_args.args[0]
+    assert isinstance(document, BufferedInputFile)
+    assert document.data == b"xlsx-data"
+    assert document.filename == "family-budget-2026-10.xlsx"
+    assert message.answer_document.await_args.kwargs["caption"] == (
+        "📥 Excel-звіт • Жовтень 2026"
+    )
+    callback.answer.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

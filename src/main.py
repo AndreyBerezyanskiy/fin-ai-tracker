@@ -19,6 +19,7 @@ from application.services import (
     CategoryService,
     ClarificationService,
     ExpenseChartService,
+    FinanceExportService,
     HouseholdSettingsService,
     PlannedExpenseService,
     ReportService,
@@ -41,6 +42,7 @@ from bot.middlewares import (
 )
 from config import Settings, get_settings
 from infrastructure.database import create_engine, create_session_factory
+from infrastructure.excel_report_renderer import XlsxFinanceReportRenderer
 from infrastructure.expense_chart_renderer import PillowExpenseChartRenderer
 from infrastructure.health import WorkerHeartbeat
 from infrastructure.observability import configure_logging
@@ -104,6 +106,10 @@ def create_dispatcher(
         dispatcher["expense_chart_service"] = ExpenseChartService(
             category_service,
             PillowExpenseChartRenderer(),
+        )
+        dispatcher["finance_export_service"] = FinanceExportService(
+            session_factory,
+            XlsxFinanceReportRenderer(),
         )
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
         dispatcher["transaction_service"] = TransactionService(session_factory)

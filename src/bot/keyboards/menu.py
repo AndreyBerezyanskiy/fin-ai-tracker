@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from datetime import date, timedelta
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -17,6 +18,11 @@ class MenuCallback(CallbackData, prefix="menu"):
 class ExpenseChartCallback(CallbackData, prefix="chart"):
     start_date: str
     end_date: str
+
+
+class ExportCallback(CallbackData, prefix="exp"):
+    action: str
+    value: str
 
 
 class CategoryMenuCallback(CallbackData, prefix="cat"):
@@ -51,14 +57,19 @@ def stats_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [_menu_button("Сьогодні", "stats_today"), _menu_button("Цей місяць", "stats_month")],
             [_menu_button("Обрати місяць", "stats_choose")],
+            [
+                InlineKeyboardButton(
+                    text="📥 Excel-звіт",
+                    callback_data=ExportCallback(action="menu", value="-").pack(),
+                )
+            ],
             [_menu_button("← Назад", "home")],
         ]
     )
 
 
 def statistics_result_keyboard(*, start_date: str, end_date: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = [
             [
                 InlineKeyboardButton(
                     text="📊 Показати діаграму",
@@ -67,8 +78,165 @@ def statistics_result_keyboard(*, start_date: str, end_date: str) -> InlineKeybo
                         end_date=end_date,
                     ).pack(),
                 )
+            ]
+        ]
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if start.day == 1 and end.day == 1 and end > start:
+        inclusive_end = end - timedelta(days=1)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📥 Завантажити Excel",
+                    callback_data=ExportCallback(
+                        action="generate",
+                        value=f"{start:%Y-%m}_{inclusive_end:%Y-%m}",
+                    ).pack(),
+                )
+            ]
+        )
+    rows.append([_menu_button("← Інший період", "stats")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _previous_month(value: date) -> date:
+    return date(value.year - 1, 12, 1) if value.month == 1 else date(value.year, value.month - 1, 1)
+
+
+def export_menu_keyboard(today: date) -> InlineKeyboardMarkup:
+    current_month = today.replace(day=1)
+    previous_month = _previous_month(current_month)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Цей місяць",
+                    callback_data=ExportCallback(
+                        action="confirm",
+                        value=f"{current_month:%Y-%m}_{current_month:%Y-%m}",
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Минулий місяць",
+                    callback_data=ExportCallback(
+                        action="confirm",
+                        value=f"{previous_month:%Y-%m}_{previous_month:%Y-%m}",
+                    ).pack(),
+                ),
             ],
-            [_menu_button("← Інший період", "stats")],
+            [
+                InlineKeyboardButton(
+                    text="Цей рік",
+                    callback_data=ExportCallback(
+                        action="confirm", value=f"{today.year}-01_{today.year}-12"
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Минулий рік",
+                    callback_data=ExportCallback(
+                        action="confirm",
+                        value=f"{today.year - 1}-01_{today.year - 1}-12",
+                    ).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Обрати місяць",
+                    callback_data=ExportCallback(action="month_years", value="-").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Обрати рік",
+                    callback_data=ExportCallback(action="years", value="-").pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Проміжок місяців",
+                    callback_data=ExportCallback(action="range_years", value="-").pack(),
+                )
+            ],
+            [_menu_button("← До статистики", "stats")],
+        ]
+    )
+
+
+def export_years_keyboard(
+    years: Iterable[int], *, action: str, prefix: str = ""
+) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=str(year),
+            callback_data=ExportCallback(
+                action=action,
+                value=f"{prefix}_{year}" if prefix else str(year),
+            ).pack(),
+        )
+        for year in years
+    ]
+    rows = [buttons[index : index + 2] for index in range(0, len(buttons), 2)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← Назад",
+                callback_data=ExportCallback(action="menu", value="-").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def export_months_keyboard(
+    year: int,
+    *,
+    action: str,
+    prefix: str = "",
+    minimum_month: int = 1,
+    maximum_month: int = 12,
+) -> InlineKeyboardMarkup:
+    labels = ("Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру")
+    buttons = [
+        InlineKeyboardButton(
+            text=labels[month - 1],
+            callback_data=ExportCallback(
+                action=action,
+                value=(
+                    f"{prefix}_{year:04d}-{month:02d}"
+                    if prefix
+                    else f"{year:04d}-{month:02d}"
+                ),
+            ).pack(),
+        )
+        for month in range(minimum_month, maximum_month + 1)
+    ]
+    rows = [buttons[index : index + 3] for index in range(0, len(buttons), 3)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← До експорту",
+                callback_data=ExportCallback(action="menu", value="-").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def export_confirmation_keyboard(period_value: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📥 Сформувати Excel",
+                    callback_data=ExportCallback(
+                        action="generate", value=period_value
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="← Змінити період",
+                    callback_data=ExportCallback(action="menu", value="-").pack(),
+                )
+            ],
         ]
     )
 
@@ -313,6 +481,7 @@ def planned_expenses_menu_keyboard(
 __all__ = [
     "CategoryMenuCallback",
     "ExpenseChartCallback",
+    "ExportCallback",
     "MenuCallback",
     "SettingsMenuCallback",
     "back_to_main_keyboard",
@@ -322,6 +491,10 @@ __all__ = [
     "category_templates_keyboard",
     "confirm_category_delete_keyboard",
     "currency_keyboard",
+    "export_confirmation_keyboard",
+    "export_menu_keyboard",
+    "export_months_keyboard",
+    "export_years_keyboard",
     "category_types_keyboard",
     "main_menu_keyboard",
     "month_selection_keyboard",

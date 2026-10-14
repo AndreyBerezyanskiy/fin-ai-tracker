@@ -23,6 +23,13 @@ from application.services.expense_charts import (
     ExpenseChartResult,
     ExpenseChartService,
 )
+from application.services.finance_exports import (
+    ExportPeriod,
+    ExportTooLargeError,
+    FinanceExportReport,
+    FinanceExportResult,
+    FinanceExportService,
+)
 from application.services.planned_expenses import PlannedExpenseService, ReminderCandidate
 from application.services.recognition import TransactionRecognitionService
 from application.services.settings import HouseholdSettingsService
@@ -67,6 +74,11 @@ __all__ = [
     "ExpenseChartData",
     "ExpenseChartResult",
     "ExpenseChartService",
+    "ExportPeriod",
+    "ExportTooLargeError",
+    "FinanceExportReport",
+    "FinanceExportResult",
+    "FinanceExportService",
     "HouseholdSettingsService",
     "InvitationLink",
     "RedemptionResult",

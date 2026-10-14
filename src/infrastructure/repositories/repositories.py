@@ -933,6 +933,42 @@ class TransactionRepository:
         )
         return list(await self.session.scalars(statement))
 
+    async def list_confirmed_for_period(
+        self,
+        *,
+        household_id: int,
+        start_date: date,
+        end_date: date,
+        currency: str,
+        limit: int,
+    ) -> list[Transaction]:
+        statement = (
+            select(Transaction)
+            .options(
+                selectinload(Transaction.member),
+                selectinload(Transaction.beneficiary),
+                selectinload(Transaction.category),
+            )
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date < end_date,
+                Transaction.currency == currency.upper(),
+            )
+            .order_by(Transaction.transaction_date.desc(), Transaction.id.desc())
+            .limit(limit)
+        )
+        return list(await self.session.scalars(statement))
+
+    async def oldest_confirmed_date(self, household_id: int) -> date | None:
+        return await self.session.scalar(
+            select(func.min(Transaction.transaction_date)).where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+            )
+        )
+
     async def confirmed_balance(self, household_id: int, *, currency: str | None = None) -> Decimal:
         filters = [
             Transaction.household_id == household_id,
@@ -977,6 +1013,27 @@ class TransactionRepository:
         return [
             CategoryTotal(code, transaction_type, amount) for code, transaction_type, amount in rows
         ]
+
+    async def type_totals(
+        self,
+        *,
+        household_id: int,
+        start_date: date,
+        end_date: date,
+        currency: str,
+    ) -> dict[TransactionType, Decimal]:
+        rows = await self.session.execute(
+            select(Transaction.type, func.sum(Transaction.amount))
+            .where(
+                Transaction.household_id == household_id,
+                Transaction.status == TransactionStatus.CONFIRMED,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date < end_date,
+                Transaction.currency == currency.upper(),
+            )
+            .group_by(Transaction.type)
+        )
+        return dict(rows.all())
 
     async def cancel_last_confirmed(
         self, *, household_id: int, member_id: int
@@ -1100,6 +1157,28 @@ class PlannedExpenseRepository:
                 .where(
                     PlannedExpense.household_id == household_id,
                     PlannedExpense.status == PlannedExpenseStatus.SCHEDULED,
+                )
+                .order_by(PlannedExpense.due_date, PlannedExpense.id)
+            )
+        )
+
+    async def list_for_period(
+        self,
+        *,
+        household_id: int,
+        start_date: date,
+        end_date: date,
+        currency: str,
+    ) -> list[PlannedExpense]:
+        return list(
+            await self.session.scalars(
+                select(PlannedExpense)
+                .options(*self._options())
+                .where(
+                    PlannedExpense.household_id == household_id,
+                    PlannedExpense.due_date >= start_date,
+                    PlannedExpense.due_date < end_date,
+                    PlannedExpense.currency == currency.upper(),
                 )
                 .order_by(PlannedExpense.due_date, PlannedExpense.id)
             )

@@ -15,6 +15,20 @@ def test_dispatcher_registers_message_handlers() -> None:
     assert dispatcher.resolve_used_update_types() == ["callback_query", "message"]
 
 
+def test_dispatcher_wires_finance_export_service() -> None:
+    settings = Settings(
+        telegram_bot_token="123456:test-token",
+        openai_api_key="test-openai-key",
+        database_url="postgresql://user:password@localhost:5432/finance",
+        allowed_chat_ids_raw="-1001234567890",
+        app_env="test",
+    )
+
+    dispatcher = main.create_dispatcher(settings=settings, session_factory=object())
+
+    assert dispatcher.workflow_data["finance_export_service"] is not None
+
+
 @pytest.mark.asyncio
 async def test_bot_startup_reaches_long_polling(
     monkeypatch: pytest.MonkeyPatch,

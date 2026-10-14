@@ -12,6 +12,9 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from application.services import (
     CategoryService,
     ExpenseChartService,
+    ExportPeriod,
+    ExportTooLargeError,
+    FinanceExportService,
     HouseholdSettingsService,
     PlannedExpenseService,
     TransactionService,
@@ -27,6 +30,7 @@ from bot.handlers.commands import (
 from bot.keyboards import (
     CategoryMenuCallback,
     ExpenseChartCallback,
+    ExportCallback,
     MenuCallback,
     SettingsMenuCallback,
     back_to_main_keyboard,
@@ -37,6 +41,10 @@ from bot.keyboards import (
     category_types_keyboard,
     confirm_category_delete_keyboard,
     currency_keyboard,
+    export_confirmation_keyboard,
+    export_menu_keyboard,
+    export_months_keyboard,
+    export_years_keyboard,
     main_menu_keyboard,
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
@@ -284,6 +292,162 @@ async def expense_chart_callback(
         ),
     )
     await callback.answer()
+
+
+def _export_period(value: str) -> ExportPeriod:
+    start_month, separator, end_month = value.partition("_")
+    if not separator:
+        raise ValueError("invalid export period")
+    return ExportPeriod.months(start_month, end_month)
+
+
+async def export_callback(
+    callback: CallbackQuery,
+    callback_data: ExportCallback,
+    household: Household,
+    finance_export_service: FinanceExportService,
+) -> None:
+    action = callback_data.action
+    today = _today(household)
+    if action == "menu":
+        await _edit(
+            callback,
+            "📥 Excel-звіт\n\nОберіть місяць, рік або проміжок цілих місяців.",
+            reply_markup=export_menu_keyboard(today),
+        )
+        return
+
+    if action in {"month_years", "years", "range_years"}:
+        years = await finance_export_service.available_years(
+            household_id=household.id, current_year=today.year
+        )
+        next_action = {
+            "month_years": "select_month_year",
+            "years": "confirm_year",
+            "range_years": "range_start_year",
+        }[action]
+        title = {
+            "month_years": "Оберіть рік",
+            "years": "Оберіть рік звіту",
+            "range_years": "Оберіть рік початку",
+        }[action]
+        await _edit(
+            callback,
+            title,
+            reply_markup=export_years_keyboard(years, action=next_action),
+        )
+        return
+
+    if action in {"select_month_year", "range_start_year"}:
+        year = int(callback_data.value)
+        maximum_month = today.month if year == today.year else 12
+        await _edit(
+            callback,
+            "Оберіть місяць" if action == "select_month_year" else "Оберіть місяць початку",
+            reply_markup=export_months_keyboard(
+                year,
+                action="confirm_month" if action == "select_month_year" else "range_start",
+                maximum_month=maximum_month,
+            ),
+        )
+        return
+
+    if action == "confirm_month":
+        value = f"{callback_data.value}_{callback_data.value}"
+        period = _export_period(value)
+        await _edit(
+            callback,
+            f"Період звіту: {period.label}",
+            reply_markup=export_confirmation_keyboard(value),
+        )
+        return
+
+    if action == "confirm_year":
+        year = int(callback_data.value)
+        value = f"{year:04d}-01_{year:04d}-12"
+        period = _export_period(value)
+        await _edit(
+            callback,
+            f"Період звіту: {period.label}",
+            reply_markup=export_confirmation_keyboard(value),
+        )
+        return
+
+    if action == "range_start":
+        start_month = callback_data.value
+        start_year = int(start_month[:4])
+        years = await finance_export_service.available_years(
+            household_id=household.id, current_year=today.year
+        )
+        await _edit(
+            callback,
+            "Оберіть рік завершення",
+            reply_markup=export_years_keyboard(
+                (year for year in years if year >= start_year),
+                action="range_end_year",
+                prefix=start_month,
+            ),
+        )
+        return
+
+    if action == "range_end_year":
+        start_month, year_text = callback_data.value.split("_", maxsplit=1)
+        year = int(year_text)
+        start_year = int(start_month[:4])
+        minimum_month = int(start_month[5:]) if year == start_year else 1
+        maximum_month = today.month if year == today.year else 12
+        await _edit(
+            callback,
+            "Оберіть місяць завершення",
+            reply_markup=export_months_keyboard(
+                year,
+                action="range_end",
+                prefix=start_month,
+                minimum_month=minimum_month,
+                maximum_month=maximum_month,
+            ),
+        )
+        return
+
+    if action == "range_end":
+        period = _export_period(callback_data.value)
+        await _edit(
+            callback,
+            f"Період звіту: {period.label}",
+            reply_markup=export_confirmation_keyboard(callback_data.value),
+        )
+        return
+
+    if action == "generate":
+        try:
+            period = _export_period(callback_data.value)
+            result = await finance_export_service.create(
+                household_id=household.id,
+                household_name=household.name,
+                currency=household.currency,
+                period=period,
+            )
+        except (ValueError, ExportTooLargeError) as error:
+            if isinstance(error, ExportTooLargeError):
+                text = "За цей період забагато операцій. Оберіть коротший проміжок."
+            else:
+                text = "Некоректний період звіту."
+            await callback.answer(text, show_alert=True)
+            return
+        if result is None:
+            await callback.answer("За цей період немає даних для звіту.", show_alert=True)
+            return
+        if callback.message is None:
+            await callback.answer()
+            return
+        await callback.message.answer_document(
+            BufferedInputFile(result.content, filename=result.filename),
+            caption=f"📥 Excel-звіт • {result.report.period.label}",
+        )
+        await callback.answer()
+        return
+
+    await callback.answer("Невідома дія.", show_alert=True)
 
 
 async def _effective_category(
@@ -568,9 +732,15 @@ def create_menu_router() -> Router:
     router.message.register(rename_category_name, StateFilter(CategoryEditStates.rename_name))
     router.callback_query.register(menu_callback, MenuCallback.filter())
     router.callback_query.register(expense_chart_callback, ExpenseChartCallback.filter())
+    router.callback_query.register(export_callback, ExportCallback.filter())
     router.callback_query.register(category_menu_callback, CategoryMenuCallback.filter())
     router.callback_query.register(settings_menu_callback, SettingsMenuCallback.filter())
     return router
 
 
-__all__ = ["CategoryEditStates", "create_menu_router", "expense_chart_callback"]
+__all__ = [
+    "CategoryEditStates",
+    "create_menu_router",
+    "expense_chart_callback",
+    "export_callback",
+]
