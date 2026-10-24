@@ -21,6 +21,7 @@ from bot.handlers.commands import (
     budget_command,
     categories_command,
     category_add_command,
+    category_choice_callback,
     help_command,
     last_command,
     month_command,
@@ -36,7 +37,11 @@ from bot.handlers.commands import (
     transaction_callback,
     undo_command,
 )
-from bot.keyboards import BudgetActionCallback, TransactionActionCallback
+from bot.keyboards import (
+    BudgetActionCallback,
+    CategoryChoiceCallback,
+    TransactionActionCallback,
+)
 from bot.middlewares import (
     AllowedCallbackQueryMiddleware,
     AllowedMessageMiddleware,
@@ -908,6 +913,100 @@ async def test_unknown_category_offers_existing_categories_and_creation() -> Non
         suggested_member_id=None,
         missing_category_type=TransactionType.EXPENSE,
     )
+
+
+@pytest.mark.asyncio
+async def test_category_choice_auto_confirms_transaction() -> None:
+    indicator = SimpleNamespace(message_id=12, delete=AsyncMock())
+    bot = SimpleNamespace(set_message_reaction=AsyncMock())
+    callback_message = SimpleNamespace(
+        answer=AsyncMock(side_effect=[indicator, None]),
+        edit_reply_markup=AsyncMock(),
+        bot=bot,
+    )
+    callback = SimpleNamespace(message=callback_message, answer=AsyncMock())
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім'я",
+        currency="EUR",
+        auto_confirm_transactions=True,
+    )
+    member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Андрій")
+    clarification = TransactionClarification(
+        id=7,
+        household_id=1,
+        member_id=2,
+        original_message_id=10,
+        original_text="незрозуміла витрата 20",
+        question="Оберіть категорію.",
+        attempts=0,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        missing_category_type="expense",
+    )
+    category = SimpleNamespace(
+        id=5,
+        name="Продукти",
+        code="groceries",
+        type=TransactionType.EXPENSE,
+        is_active=True,
+    )
+    recognized = RecognizedTransaction(
+        type=TransactionType.EXPENSE,
+        amount=Decimal("20.00"),
+        currency="EUR",
+        category_code="groceries",
+        description="Покупка",
+        date="2026-10-24",
+    )
+    result = RecognitionResult(
+        intent=RecognitionIntent.CREATE_TRANSACTIONS,
+        transactions=(recognized,),
+        needs_clarification=False,
+        clarification_question=None,
+        ai_metadata={},
+    )
+    transaction = SimpleNamespace(
+        type=TransactionType.EXPENSE,
+        amount=Decimal("20.00"),
+        currency="EUR",
+        description="Покупка",
+        transaction_date=date(2026, 10, 24),
+        category=category,
+    )
+    transaction_service = SimpleNamespace(
+        create_confirmed=AsyncMock(return_value=(transaction,)),
+        create_pending=AsyncMock(),
+        confirmed_balance=AsyncMock(return_value=Decimal("80.00")),
+    )
+    clarification_service = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=clarification),
+        cancel=AsyncMock(return_value=True),
+        remember_alias=AsyncMock(),
+    )
+
+    await category_choice_callback(
+        callback,
+        CategoryChoiceCallback(action="select", clarification_id=7, category_id=5),
+        household,
+        member,
+        SimpleNamespace(recognize=AsyncMock(return_value=result)),
+        transaction_service,
+        clarification_service,
+        SimpleNamespace(list=AsyncMock(return_value=(category,))),
+    )
+
+    transaction_service.create_confirmed.assert_awaited_once()
+    transaction_service.create_pending.assert_not_awaited()
+    clarification_service.cancel.assert_awaited_once_with(7)
+    confirmation = callback_message.answer.await_args_list[1]
+    assert "✅ Додано 1 операцію" in confirmation.args[0]
+    labels = [
+        button.text for row in confirmation.kwargs["reply_markup"].inline_keyboard for button in row
+    ]
+    assert labels == ["✏️ Виправити", "↩️ Скасувати"]
+    bot.set_message_reaction.assert_awaited_once()
+    indicator.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

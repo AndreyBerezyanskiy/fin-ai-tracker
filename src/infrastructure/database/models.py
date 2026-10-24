@@ -69,7 +69,7 @@ class Household(TimestampMixin, Base):
         Boolean, nullable=False, default=True, server_default=text("true")
     )
     auto_confirm_transactions: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("false")
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
 
     members: Mapped[list[Member]] = relationship(back_populates="household")

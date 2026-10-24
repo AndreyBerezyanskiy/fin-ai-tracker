@@ -194,9 +194,9 @@ async def test_household_currency_can_be_changed(
     updated = await service.set_currency(household_id=household_id, currency="uah")
 
     assert updated.currency == "UAH"
-    assert updated.auto_confirm_transactions is False
-    updated = await service.toggle_auto_confirm_transactions(household_id)
     assert updated.auto_confirm_transactions is True
+    updated = await service.toggle_auto_confirm_transactions(household_id)
+    assert updated.auto_confirm_transactions is False
     with pytest.raises(ValueError, match="unsupported currency"):
         await service.set_currency(household_id=household_id, currency="BTC")
 

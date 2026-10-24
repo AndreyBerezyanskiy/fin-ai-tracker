@@ -248,7 +248,7 @@ def month_selection_keyboard(months: Iterable[str]) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(
-    *, reports_enabled: bool, auto_confirm_transactions: bool = False, currency: str = "EUR"
+    *, reports_enabled: bool, auto_confirm_transactions: bool = True, currency: str = "EUR"
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
