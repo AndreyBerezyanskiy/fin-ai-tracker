@@ -283,8 +283,9 @@ async def test_today_command_uses_deterministic_report_totals() -> None:
         ),
         recent_transactions=AsyncMock(return_value=()),
     )
+    category_service = SimpleNamespace(statistics=AsyncMock(return_value=()))
 
-    await today_command(message, household, report_service)
+    await today_command(message, household, report_service, category_service)
 
     report_service.totals.assert_awaited_once()
     answer = message.answer.await_args.args[0]
@@ -326,13 +327,63 @@ async def test_today_command_hides_empty_income_or_expense(
         totals=AsyncMock(return_value=totals),
         recent_transactions=AsyncMock(return_value=()),
     )
+    category_service = SimpleNamespace(statistics=AsyncMock(return_value=()))
 
-    await today_command(message, household, report_service)
+    await today_command(message, household, report_service, category_service)
 
     answer = message.answer.await_args.args[0]
     assert present in answer
     assert absent not in answer
     assert "Баланс:" in answer
+    assert "За категоріями:" not in answer
+
+
+@pytest.mark.asyncio
+async def test_today_command_groups_changed_categories() -> None:
+    message = SimpleNamespace(answer=AsyncMock())
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сімейні фінанси",
+        currency="EUR",
+        timezone="Europe/Paris",
+    )
+    report_service = SimpleNamespace(
+        totals=AsyncMock(
+            return_value=PeriodTotals(income=Decimal("196.00"), expense=Decimal("57.00"))
+        ),
+        recent_transactions=AsyncMock(return_value=()),
+    )
+    category_service = SimpleNamespace(
+        statistics=AsyncMock(
+            return_value=(
+                SimpleNamespace(
+                    name="Продукти",
+                    type=TransactionType.EXPENSE,
+                    amount=Decimal("45.00"),
+                ),
+                SimpleNamespace(
+                    name="Транспорт",
+                    type=TransactionType.EXPENSE,
+                    amount=Decimal("12.00"),
+                ),
+                SimpleNamespace(
+                    name="Надходження за навчання",
+                    type=TransactionType.INCOME,
+                    amount=Decimal("196.00"),
+                ),
+            )
+        )
+    )
+
+    await today_command(message, household, report_service, category_service)
+
+    answer = message.answer.await_args.args[0]
+    assert "За категоріями:" in answer
+    assert "Доходи:\n• Надходження за навчання: +€196.00" in answer
+    assert "Витрати:\n• Продукти: −€45.00\n• Транспорт: −€12.00" in answer
+    assert answer.index("За категоріями:") < answer.index("Останні операції:")
+    category_service.statistics.assert_awaited_once()
 
 
 @pytest.mark.asyncio

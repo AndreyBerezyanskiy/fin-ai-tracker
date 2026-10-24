@@ -19,6 +19,7 @@ from application.services import (
     BudgetService,
     BudgetStatus,
     CategoryService,
+    CategoryStatistic,
     ClarificationService,
     HouseholdSettingsService,
     MonthReport,
@@ -198,6 +199,7 @@ async def today_command(
     message: Message,
     household: Household,
     report_service: ReportService,
+    category_service: CategoryService,
 ) -> None:
     today = _today(household)
     totals = await report_service.totals(
@@ -212,7 +214,16 @@ async def today_command(
         end_date=today + timedelta(days=1),
         currency=household.currency,
     )
-    lines = [_format_totals("Сьогодні", totals, household.currency), "", "Останні операції:"]
+    categories = await category_service.statistics(
+        household_id=household.id,
+        start_date=today,
+        end_date=today + timedelta(days=1),
+    )
+    lines = [_format_totals("Сьогодні", totals, household.currency)]
+    category_lines = _format_daily_categories(categories, household.currency)
+    if category_lines:
+        lines.extend(["", "За категоріями:", *category_lines])
+    lines.extend(["", "Останні операції:"])
     lines.extend(_format_transaction_line(item) for item in transactions)
     if not transactions:
         lines.append("Підтверджених операцій сьогодні немає.")
@@ -550,6 +561,34 @@ def _operation_word(count: int) -> str:
 def _format_balance(balance: Decimal, currency: str) -> str:
     sign = "−" if balance < 0 else ""
     return f"{sign}{_currency_prefix(currency)}{abs(balance):.2f}"
+
+
+def _format_daily_categories(
+    categories: tuple[CategoryStatistic, ...], currency: str
+) -> list[str]:
+    lines: list[str] = []
+    for transaction_type, title in (
+        (TransactionType.INCOME, "Доходи"),
+        (TransactionType.EXPENSE, "Витрати"),
+    ):
+        items = sorted(
+            (
+                item
+                for item in categories
+                if item.type is transaction_type and item.amount != 0
+            ),
+            key=lambda item: item.amount,
+            reverse=True,
+        )
+        if not items:
+            continue
+        lines.append(f"{title}:")
+        lines.extend(
+            f"• {item.name}: {_amount_prefix(transaction_type)}"
+            f"{_currency_prefix(currency)}{item.amount:.2f}"
+            for item in items
+        )
+    return lines
 
 
 def _format_transactions(
