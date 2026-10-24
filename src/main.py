@@ -112,7 +112,8 @@ def create_dispatcher(
             XlsxFinanceReportRenderer(),
         )
         dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
-        dispatcher["transaction_service"] = TransactionService(session_factory)
+        transaction_service = TransactionService(session_factory)
+        dispatcher["transaction_service"] = transaction_service
         dispatcher["planned_expense_service"] = PlannedExpenseService(session_factory)
         dispatcher["clarification_service"] = ClarificationService(session_factory)
         ai_usage_service = AIUsageService(session_factory)
@@ -218,6 +219,7 @@ async def start_bot(settings: Settings | None = None) -> None:
                     planned_expense_service=dispatcher.workflow_data.get(
                         "planned_expense_service"
                     ),
+                    transaction_service=dispatcher.workflow_data.get("transaction_service"),
                 )
 
                 async def start_scheduler() -> None:

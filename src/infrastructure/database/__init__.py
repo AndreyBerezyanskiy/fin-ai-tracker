@@ -17,6 +17,7 @@ from infrastructure.database.models import (
     ProcessedTelegramUpdate,
     ReportDelivery,
     Transaction,
+    TransactionActionMessage,
     TransactionClarification,
 )
 from infrastructure.database.session import create_engine, create_session_factory, session_scope
@@ -38,6 +39,7 @@ __all__ = [
     "ProcessedTelegramUpdate",
     "ReportDelivery",
     "Transaction",
+    "TransactionActionMessage",
     "TransactionClarification",
     "create_engine",
     "create_session_factory",

@@ -220,3 +220,57 @@ async def test_scheduler_processes_due_households_independently() -> None:
     await scheduler.run_due_reports()
 
     assert report_service.deliver.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_removes_expired_transaction_buttons() -> None:
+    now = datetime(2026, 10, 24, 14, 15, tzinfo=UTC)
+    action_message = SimpleNamespace(
+        id=9,
+        household_id=7,
+        telegram_chat_id=-100123,
+        telegram_message_id=50,
+    )
+    transaction_service = SimpleNamespace(
+        due_action_messages=AsyncMock(return_value=(action_message,)),
+        complete_action_message=AsyncMock(),
+    )
+    sender = SimpleNamespace(edit_message_reply_markup=AsyncMock())
+    scheduler = ReportScheduler(
+        sender=sender,
+        report_service=SimpleNamespace(),
+        transaction_service=transaction_service,
+    )
+
+    await scheduler.run_due_action_cleanups(now)
+
+    transaction_service.due_action_messages.assert_awaited_once_with(now)
+    sender.edit_message_reply_markup.assert_awaited_once_with(
+        chat_id=-100123,
+        message_id=50,
+        reply_markup=None,
+    )
+    transaction_service.complete_action_message.assert_awaited_once_with(9)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_retries_transaction_button_cleanup_after_failure() -> None:
+    action_message = SimpleNamespace(
+        id=9,
+        household_id=7,
+        telegram_chat_id=-100123,
+        telegram_message_id=50,
+    )
+    transaction_service = SimpleNamespace(
+        due_action_messages=AsyncMock(return_value=(action_message,)),
+        complete_action_message=AsyncMock(),
+    )
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(edit_message_reply_markup=AsyncMock(side_effect=TimeoutError)),
+        report_service=SimpleNamespace(),
+        transaction_service=transaction_service,
+    )
+
+    await scheduler.run_due_action_cleanups(datetime(2026, 10, 24, 14, 15, tzinfo=UTC))
+
+    transaction_service.complete_action_message.assert_not_awaited()

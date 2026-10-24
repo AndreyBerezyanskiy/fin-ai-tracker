@@ -918,9 +918,10 @@ async def test_unknown_category_offers_existing_categories_and_creation() -> Non
 @pytest.mark.asyncio
 async def test_category_choice_auto_confirms_transaction() -> None:
     indicator = SimpleNamespace(message_id=12, delete=AsyncMock())
+    confirmation_message = SimpleNamespace(message_id=13)
     bot = SimpleNamespace(set_message_reaction=AsyncMock())
     callback_message = SimpleNamespace(
-        answer=AsyncMock(side_effect=[indicator, None]),
+        answer=AsyncMock(side_effect=[indicator, confirmation_message]),
         edit_reply_markup=AsyncMock(),
         bot=bot,
     )
@@ -978,6 +979,7 @@ async def test_category_choice_auto_confirms_transaction() -> None:
         create_confirmed=AsyncMock(return_value=(transaction,)),
         create_pending=AsyncMock(),
         confirmed_balance=AsyncMock(return_value=Decimal("80.00")),
+        remember_action_message=AsyncMock(),
     )
     clarification_service = SimpleNamespace(
         get_by_id=AsyncMock(return_value=clarification),
@@ -1006,6 +1008,7 @@ async def test_category_choice_auto_confirms_transaction() -> None:
     ]
     assert labels == ["✏️ Виправити", "↩️ Скасувати"]
     bot.set_message_reaction.assert_awaited_once()
+    transaction_service.remember_action_message.assert_awaited_once()
     indicator.delete.assert_awaited_once()
 
 
@@ -1289,7 +1292,7 @@ async def test_transaction_callback_changes_message_when_cancelled() -> None:
 async def test_transaction_callback_undoes_confirmed_batch_for_author() -> None:
     bot = SimpleNamespace(set_message_reaction=AsyncMock())
     callback = SimpleNamespace(
-        message=SimpleNamespace(edit_text=AsyncMock(), bot=bot),
+        message=SimpleNamespace(message_id=20, edit_text=AsyncMock(), bot=bot),
         answer=AsyncMock(),
     )
     household = Household(id=1, telegram_chat_id=-100123, name="Сім’я", currency="EUR")
@@ -1304,7 +1307,8 @@ async def test_transaction_callback_undoes_confirmed_batch_for_author() -> None:
     service = SimpleNamespace(
         cancel_confirmed_batch=AsyncMock(
             return_value=SimpleNamespace(transactions=(transaction,), changed=True)
-        )
+        ),
+        dismiss_action_message=AsyncMock(),
     )
 
     await transaction_callback(
@@ -1320,18 +1324,26 @@ async def test_transaction_callback_undoes_confirmed_batch_for_author() -> None:
     )
     assert "❌ Скасовано 1 операцію" in callback.message.edit_text.await_args.args[0]
     bot.set_message_reaction.assert_awaited_once()
+    service.dismiss_action_message.assert_awaited_once_with(
+        telegram_chat_id=-100123, telegram_message_id=20
+    )
 
 
 @pytest.mark.asyncio
 async def test_transaction_callback_starts_safe_replacement() -> None:
     callback = SimpleNamespace(
-        message=SimpleNamespace(answer=AsyncMock()),
+        message=SimpleNamespace(
+            message_id=20,
+            answer=AsyncMock(),
+            edit_reply_markup=AsyncMock(),
+        ),
         answer=AsyncMock(),
     )
     household = Household(id=1, telegram_chat_id=-100123, name="Сім’я")
     member = Member(id=2, household_id=1, telegram_user_id=42, display_name="Олена")
     transaction_service = SimpleNamespace(
-        get_confirmed_batch=AsyncMock(return_value=(object(),))
+        get_confirmed_batch=AsyncMock(return_value=(object(),)),
+        dismiss_action_message=AsyncMock(),
     )
     clarification_service = SimpleNamespace(
         begin_transaction_replace=AsyncMock()
@@ -1351,6 +1363,10 @@ async def test_transaction_callback_starts_safe_replacement() -> None:
     )
     assert "Початковий запис залишиться активним" in (
         callback.message.answer.await_args.args[0]
+    )
+    callback.message.edit_reply_markup.assert_awaited_once_with(reply_markup=None)
+    transaction_service.dismiss_action_message.assert_awaited_once_with(
+        telegram_chat_id=-100123, telegram_message_id=20
     )
 
 
@@ -1390,11 +1406,12 @@ async def test_last_and_undo_commands_use_transaction_service() -> None:
 @pytest.mark.asyncio
 async def test_plain_message_auto_confirms_and_offers_correction() -> None:
     processing_message = SimpleNamespace(message_id=11, delete=AsyncMock())
+    confirmation_message = SimpleNamespace(message_id=12)
     bot = SimpleNamespace(set_message_reaction=AsyncMock())
     message = SimpleNamespace(
         message_id=10,
         text="кава 4,50",
-        answer=AsyncMock(),
+        answer=AsyncMock(return_value=confirmation_message),
         reply=AsyncMock(return_value=processing_message),
         bot=bot,
     )
@@ -1436,6 +1453,7 @@ async def test_plain_message_auto_confirms_and_offers_correction() -> None:
         create_confirmed=AsyncMock(return_value=(transaction,)),
         create_pending=AsyncMock(),
         confirmed_balance=AsyncMock(return_value=Decimal("95.50")),
+        remember_action_message=AsyncMock(),
     )
 
     await recognize_plain_message(
@@ -1454,6 +1472,13 @@ async def test_plain_message_auto_confirms_and_offers_correction() -> None:
     ]
     assert labels == ["✏️ Виправити", "↩️ Скасувати"]
     bot.set_message_reaction.assert_awaited_once()
+    cleanup = transaction_service.remember_action_message.await_args.kwargs
+    assert cleanup["household_id"] == 1
+    assert cleanup["telegram_chat_id"] == -100123
+    assert cleanup["telegram_message_id"] == 12
+    assert timedelta(minutes=14) < cleanup["expires_at"] - datetime.now(UTC) <= timedelta(
+        minutes=15
+    )
 
 
 @pytest.mark.asyncio
@@ -1518,6 +1543,7 @@ async def test_correction_replaces_original_only_after_successful_recognition() 
             return_value=SimpleNamespace(transactions=(transaction,), changed=True)
         ),
         confirmed_balance=AsyncMock(return_value=Decimal("79.00")),
+        remember_action_message=AsyncMock(),
     )
     clarification_service = SimpleNamespace(
         get=AsyncMock(return_value=clarification),

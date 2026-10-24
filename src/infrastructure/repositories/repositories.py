@@ -33,6 +33,7 @@ from infrastructure.database.models import (
     ProcessedTelegramUpdate,
     ReportDelivery,
     Transaction,
+    TransactionActionMessage,
     TransactionClarification,
 )
 
@@ -425,6 +426,62 @@ class ReportDeliveryRepository:
                 ReportDelivery.household_id == household_id,
                 ReportDelivery.report_type == report_type.value,
                 ReportDelivery.local_date == local_date,
+            )
+        )
+
+
+class TransactionActionMessageRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(
+        self,
+        *,
+        household_id: int,
+        telegram_chat_id: int,
+        telegram_message_id: int,
+        expires_at: datetime,
+    ) -> None:
+        await self.session.execute(
+            insert(TransactionActionMessage)
+            .values(
+                household_id=household_id,
+                telegram_chat_id=telegram_chat_id,
+                telegram_message_id=telegram_message_id,
+                expires_at=expires_at,
+            )
+            .on_conflict_do_update(
+                constraint="uq_transaction_action_message",
+                set_={"expires_at": expires_at},
+            )
+        )
+
+    async def list_due(
+        self, now: datetime, *, limit: int = 100
+    ) -> list[TransactionActionMessage]:
+        return list(
+            await self.session.scalars(
+                select(TransactionActionMessage)
+                .where(TransactionActionMessage.expires_at <= now)
+                .order_by(TransactionActionMessage.expires_at, TransactionActionMessage.id)
+                .limit(limit)
+            )
+        )
+
+    async def delete(self, action_message_id: int) -> None:
+        await self.session.execute(
+            delete(TransactionActionMessage).where(
+                TransactionActionMessage.id == action_message_id
+            )
+        )
+
+    async def delete_by_message(
+        self, *, telegram_chat_id: int, telegram_message_id: int
+    ) -> None:
+        await self.session.execute(
+            delete(TransactionActionMessage).where(
+                TransactionActionMessage.telegram_chat_id == telegram_chat_id,
+                TransactionActionMessage.telegram_message_id == telegram_message_id,
             )
         )
 

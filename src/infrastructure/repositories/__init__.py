@@ -15,6 +15,7 @@ from infrastructure.repositories.repositories import (
     PlannedExpenseRepository,
     ProcessedTelegramUpdateRepository,
     ReportDeliveryRepository,
+    TransactionActionMessageRepository,
     TransactionClarificationRepository,
     TransactionCreateResult,
     TransactionRepository,
@@ -36,6 +37,7 @@ __all__ = [
     "PlannedExpenseRepository",
     "ReportDeliveryRepository",
     "TransactionCreateResult",
+    "TransactionActionMessageRepository",
     "TransactionRepository",
     "TransactionClarificationRepository",
 ]

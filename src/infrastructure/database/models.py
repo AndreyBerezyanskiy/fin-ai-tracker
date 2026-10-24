@@ -99,6 +99,27 @@ class ReportDelivery(TimestampMixin, Base):
         return ReportType(self.report_type)
 
 
+class TransactionActionMessage(TimestampMixin, Base):
+    __tablename__ = "transaction_action_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "telegram_chat_id",
+            "telegram_message_id",
+            name="uq_transaction_action_message",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    household_id: Mapped[int] = mapped_column(
+        ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class Member(TimestampMixin, Base):
     __tablename__ = "members"
     __table_args__ = (
@@ -496,5 +517,6 @@ __all__ = [
     "ProcessedTelegramUpdate",
     "ReportDelivery",
     "Transaction",
+    "TransactionActionMessage",
     "TransactionClarification",
 ]

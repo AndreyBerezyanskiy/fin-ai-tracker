@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.enums import TransactionStatus
 from domain.models import RecognitionResult
-from infrastructure.database import Category, Household, Member, Transaction, session_scope
-from infrastructure.repositories import CategoryRepository, TransactionRepository
+from infrastructure.database import (
+    Category,
+    Household,
+    Member,
+    Transaction,
+    TransactionActionMessage,
+    session_scope,
+)
+from infrastructure.repositories import (
+    CategoryRepository,
+    TransactionActionMessageRepository,
+    TransactionRepository,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +32,41 @@ class BatchTransitionResult:
 class TransactionService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session_factory = session_factory
+
+    async def remember_action_message(
+        self,
+        *,
+        household_id: int,
+        telegram_chat_id: int,
+        telegram_message_id: int,
+        expires_at: datetime,
+    ) -> None:
+        async with session_scope(self.session_factory) as session:
+            await TransactionActionMessageRepository(session).create(
+                household_id=household_id,
+                telegram_chat_id=telegram_chat_id,
+                telegram_message_id=telegram_message_id,
+                expires_at=expires_at,
+            )
+
+    async def due_action_messages(
+        self, now: datetime
+    ) -> tuple[TransactionActionMessage, ...]:
+        async with self.session_factory() as session:
+            return tuple(await TransactionActionMessageRepository(session).list_due(now))
+
+    async def complete_action_message(self, action_message_id: int) -> None:
+        async with session_scope(self.session_factory) as session:
+            await TransactionActionMessageRepository(session).delete(action_message_id)
+
+    async def dismiss_action_message(
+        self, *, telegram_chat_id: int, telegram_message_id: int
+    ) -> None:
+        async with session_scope(self.session_factory) as session:
+            await TransactionActionMessageRepository(session).delete_by_message(
+                telegram_chat_id=telegram_chat_id,
+                telegram_message_id=telegram_message_id,
+            )
 
     async def create_pending(
         self,

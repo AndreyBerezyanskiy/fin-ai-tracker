@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 AI_UNAVAILABLE_MESSAGE = (
     "Не вдалося обробити повідомлення. Спробуйте ще раз або скористайтеся /help."
 )
+TRANSACTION_ACTION_TTL = timedelta(minutes=15)
 
 HELP_TEXT = """Доступні команди:
 /start — підключити цю сімейну групу
@@ -660,7 +661,7 @@ async def _answer_confirmed_transactions(
         household_id=household.id, currency=household.currency
     )
     count = len(transactions)
-    await message.answer(
+    confirmation_message = await message.answer(
         _format_transactions(
             transactions,
             household,
@@ -672,6 +673,40 @@ async def _answer_confirmed_transactions(
     await _set_transaction_reaction(
         message, household, telegram_message_id, enabled=True
     )
+    confirmation_message_id = getattr(confirmation_message, "message_id", None)
+    if isinstance(confirmation_message_id, int):
+        try:
+            await transaction_service.remember_action_message(
+                household_id=household.id,
+                telegram_chat_id=household.telegram_chat_id,
+                telegram_message_id=confirmation_message_id,
+                expires_at=datetime.now(UTC) + TRANSACTION_ACTION_TTL,
+            )
+        except Exception as error:
+            logger.warning(
+                "Could not schedule transaction action cleanup: household_ref=%s "
+                "error_type=%s",
+                pseudonymize(household.id),
+                type(error).__name__,
+            )
+
+
+async def _dismiss_transaction_actions(
+    message: Message,
+    household: Household,
+    transaction_service: TransactionService,
+) -> None:
+    try:
+        await transaction_service.dismiss_action_message(
+            telegram_chat_id=household.telegram_chat_id,
+            telegram_message_id=message.message_id,
+        )
+    except Exception as error:
+        logger.warning(
+            "Could not dismiss transaction action cleanup: household_ref=%s error_type=%s",
+            pseudonymize(household.id),
+            type(error).__name__,
+        )
 
 
 def _format_planned_expense(
@@ -1816,6 +1851,9 @@ async def transaction_callback(
                 callback_data.message_id,
                 enabled=False,
             )
+            await _dismiss_transaction_actions(
+                callback.message, household, transaction_service
+            )
         await callback.answer("❌ Скасовано")
         return
 
@@ -1840,6 +1878,10 @@ async def transaction_callback(
             telegram_message_id=callback_data.message_id,
         )
         if callback.message is not None:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await _dismiss_transaction_actions(
+                callback.message, household, transaction_service
+            )
             await callback.message.answer(
                 "✏️ Надішліть виправлений список операцій повністю.\n"
                 "Початковий запис залишиться активним, доки виправлення не буде додано."

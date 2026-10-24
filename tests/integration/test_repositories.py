@@ -127,12 +127,12 @@ async def service_session_factory(
         await db_session.execute(delete(FeatureFlag))
         await db_session.execute(
             delete(Transaction).where(
-                Transaction.telegram_chat_id.in_((-100999, -100998, -100997))
+                Transaction.telegram_chat_id.in_((-100999, -100998, -100997, -100996))
             )
         )
         await db_session.execute(
             delete(Household).where(
-                Household.telegram_chat_id.in_((-100999, -100998, -100997))
+                Household.telegram_chat_id.in_((-100999, -100998, -100997, -100996))
             )
         )
     try:
@@ -142,12 +142,12 @@ async def service_session_factory(
             await db_session.execute(delete(FeatureFlag))
             await db_session.execute(
                 delete(Transaction).where(
-                    Transaction.telegram_chat_id.in_((-100999, -100998, -100997))
+                    Transaction.telegram_chat_id.in_((-100999, -100998, -100997, -100996))
                 )
             )
             await db_session.execute(
                 delete(Household).where(
-                    Household.telegram_chat_id.in_((-100999, -100998, -100997))
+                    Household.telegram_chat_id.in_((-100999, -100998, -100997, -100996))
                 )
             )
         await engine.dispose()
@@ -199,6 +199,34 @@ async def test_household_currency_can_be_changed(
     assert updated.auto_confirm_transactions is False
     with pytest.raises(ValueError, match="unsupported currency"):
         await service.set_currency(household_id=household_id, currency="BTC")
+
+
+@pytest.mark.asyncio
+async def test_transaction_action_messages_are_persisted_until_due(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(service_session_factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100996, name="Temporary transaction actions"
+        )
+        household_id = household.id
+
+    service = TransactionService(service_session_factory)
+    expires_at = datetime(2026, 10, 24, 14, 15, tzinfo=UTC)
+    await service.remember_action_message(
+        household_id=household_id,
+        telegram_chat_id=-100996,
+        telegram_message_id=50,
+        expires_at=expires_at,
+    )
+
+    assert await service.due_action_messages(expires_at - timedelta(seconds=1)) == ()
+    due = await service.due_action_messages(expires_at)
+    assert len(due) == 1
+    assert due[0].telegram_message_id == 50
+
+    await service.complete_action_message(due[0].id)
+    assert await service.due_action_messages(expires_at) == ()
 
 
 @pytest.mark.asyncio
