@@ -126,7 +126,9 @@ async def service_session_factory(
     async with session_scope(factory) as db_session:
         await db_session.execute(delete(FeatureFlag))
         await db_session.execute(
-            delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
+            delete(Transaction).where(
+                Transaction.telegram_chat_id.in_((-100999, -100998, -100997))
+            )
         )
         await db_session.execute(
             delete(Household).where(
@@ -139,7 +141,9 @@ async def service_session_factory(
         async with session_scope(factory) as db_session:
             await db_session.execute(delete(FeatureFlag))
             await db_session.execute(
-                delete(Transaction).where(Transaction.telegram_chat_id.in_((-100999, -100998)))
+                delete(Transaction).where(
+                    Transaction.telegram_chat_id.in_((-100999, -100998, -100997))
+                )
             )
             await db_session.execute(
                 delete(Household).where(
@@ -190,6 +194,9 @@ async def test_household_currency_can_be_changed(
     updated = await service.set_currency(household_id=household_id, currency="uah")
 
     assert updated.currency == "UAH"
+    assert updated.auto_confirm_transactions is False
+    updated = await service.toggle_auto_confirm_transactions(household_id)
+    assert updated.auto_confirm_transactions is True
     with pytest.raises(ValueError, match="unsupported currency"):
         await service.set_currency(household_id=household_id, currency="BTC")
 
@@ -936,10 +943,85 @@ async def test_pending_batch_confirm_last_and_undo_flow(
     assert toggled_household.reports_enabled is False
 
     undone = await service.undo_last(household_id=household.id, member_id=member.id)
-    assert undone is not None
-    assert undone.status is TransactionStatus.CANCELLED
-    assert len(await service.list_recent(household_id=household.id)) == 1
+    assert len(undone) == 2
+    assert all(item.status is TransactionStatus.CANCELLED for item in undone)
+    assert len(await service.list_recent(household_id=household.id)) == 0
+    assert await service.confirmed_balance(household_id=household.id) == Decimal("0.00")
+
+
+@pytest.mark.asyncio
+async def test_confirmed_batch_can_be_replaced_atomically(
+    service_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    factory = service_session_factory
+    async with session_scope(factory) as db_session:
+        household = await HouseholdRepository(db_session).get_or_create(
+            telegram_chat_id=-100997, name="Replacement test"
+        )
+        member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=97,
+            display_name="Тест",
+        )
+        other_member = await MemberRepository(db_session).get_or_create(
+            household_id=household.id,
+            telegram_user_id=96,
+            display_name="Інший учасник",
+        )
+        await add_template_categories(db_session, household.id, "health")
+
+    def recognition(amount: str) -> RecognitionResult:
+        return RecognitionResult(
+            intent=RecognitionIntent.CREATE_TRANSACTIONS,
+            transactions=(
+                RecognizedTransaction(
+                    type=TransactionType.EXPENSE,
+                    amount=Decimal(amount),
+                    currency="EUR",
+                    category_code="health",
+                    description="Аптека",
+                    date="2026-10-07",
+                ),
+            ),
+            needs_clarification=False,
+            clarification_question=None,
+            ai_metadata={},
+        )
+
+    service = TransactionService(factory)
+    original = await service.create_confirmed(
+        household=household,
+        member=member,
+        telegram_message_id=700,
+        original_text="аптека 18",
+        recognition=recognition("18.00"),
+    )
+    denied = await service.cancel_confirmed_batch(
+        household_id=household.id,
+        member_id=other_member.id,
+        telegram_message_id=700,
+    )
+    assert denied.changed is False
     assert await service.confirmed_balance(household_id=household.id) == Decimal("-18.00")
+
+    replaced = await service.replace_confirmed_batch(
+        household=household,
+        member=member,
+        telegram_message_id=700,
+        replacement_message_id=701,
+        original_text="аптека 21",
+        recognition=recognition("21.00"),
+    )
+
+    assert replaced.changed is True
+    assert replaced.transactions[0].amount == Decimal("21.00")
+    assert original[0].id != replaced.transactions[0].id
+    assert await service.confirmed_balance(household_id=household.id) == Decimal("-21.00")
+    assert not await service.get_confirmed_batch(
+        household_id=household.id,
+        member_id=member.id,
+        telegram_message_id=700,
+    )
 
 
 @pytest.mark.asyncio

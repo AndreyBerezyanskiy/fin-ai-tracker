@@ -68,6 +68,9 @@ class Household(TimestampMixin, Base):
     reports_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    auto_confirm_transactions: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
     members: Mapped[list[Member]] = relationship(back_populates="household")
     categories: Mapped[list[Category]] = relationship(back_populates="household")
@@ -176,6 +179,7 @@ class TransactionClarification(TimestampMixin, Base):
     planned_expense_id: Mapped[int | None] = mapped_column(
         ForeignKey("planned_expenses.id", ondelete="SET NULL"), nullable=True
     )
+    replacement_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 class ProcessedTelegramUpdate(Base):

@@ -688,6 +688,45 @@ async def test_settings_callback_toggles_reports() -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_callback_toggles_automatic_transaction_confirmation() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+        auto_confirm_transactions=False,
+    )
+    updated = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+        auto_confirm_transactions=True,
+    )
+    service = SimpleNamespace(
+        toggle_auto_confirm_transactions=AsyncMock(return_value=updated)
+    )
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="auto_confirm", value="toggle"),
+        household,
+        service,
+    )
+
+    service.toggle_auto_confirm_transactions.assert_awaited_once_with(1)
+    assert "Автододавання операцій: увімкнене" in (
+        callback.message.edit_text.await_args.args[0]
+    )
+
+
+@pytest.mark.asyncio
 async def test_settings_callback_opens_currency_menu() -> None:
     callback = SimpleNamespace(
         message=SimpleNamespace(edit_text=AsyncMock()),

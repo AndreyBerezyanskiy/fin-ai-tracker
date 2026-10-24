@@ -7,7 +7,7 @@ from aiogram import Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, Message
 
 from application.services import (
     CategoryService,
@@ -113,11 +113,21 @@ def _recent_months(today: date, count: int = 6) -> tuple[str, ...]:
 
 def _settings_text(household: Household) -> str:
     reports = "увімкнені" if household.reports_enabled else "вимкнені"
+    auto_confirm = "увімкнене" if household.auto_confirm_transactions else "вимкнене"
     return (
         "Налаштування групи\n"
         f"Валюта: {household.currency}\n"
         f"Часовий пояс: {household.timezone}\n"
-        f"Автоматичні звіти: {reports}"
+        f"Автоматичні звіти: {reports}\n"
+        f"Автододавання операцій: {auto_confirm}"
+    )
+
+
+def _settings_keyboard(household: Household) -> InlineKeyboardMarkup:
+    return settings_keyboard(
+        reports_enabled=household.reports_enabled,
+        auto_confirm_transactions=household.auto_confirm_transactions,
+        currency=household.currency,
     )
 
 
@@ -230,12 +240,14 @@ async def menu_callback(
         )
         return
     if section == "undo":
-        transaction = await transaction_service.undo_last(
+        transactions = await transaction_service.undo_last(
             household_id=household.id, member_id=member.id
         )
         text = (
-            f"Скасовано: {_format_transaction_line(transaction)}"
-            if transaction is not None
+            "Скасовано:\n" + "\n".join(
+                _format_transaction_line(item) for item in transactions
+            )
+            if transactions
             else "Немає підтвердженої операції для скасування."
         )
         await _edit(callback, text, reply_markup=back_to_main_keyboard())
@@ -244,9 +256,7 @@ async def menu_callback(
         await _edit(
             callback,
             _settings_text(household),
-            reply_markup=settings_keyboard(
-                reports_enabled=household.reports_enabled, currency=household.currency
-            ),
+            reply_markup=_settings_keyboard(household),
         )
         return
     await callback.answer("Невідомий розділ.", show_alert=True)
@@ -630,9 +640,7 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(household),
-            reply_markup=settings_keyboard(
-                reports_enabled=household.reports_enabled, currency=household.currency
-            ),
+            reply_markup=_settings_keyboard(household),
         )
         return
     if callback_data.action == "reports":
@@ -640,9 +648,17 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(updated),
-            reply_markup=settings_keyboard(
-                reports_enabled=updated.reports_enabled, currency=updated.currency
-            ),
+            reply_markup=_settings_keyboard(updated),
+        )
+        return
+    if callback_data.action == "auto_confirm":
+        updated = await household_settings_service.toggle_auto_confirm_transactions(
+            household.id
+        )
+        await _edit(
+            callback,
+            _settings_text(updated),
+            reply_markup=_settings_keyboard(updated),
         )
         return
     if callback_data.action == "currency" and callback_data.value == "menu":
@@ -665,9 +681,7 @@ async def settings_menu_callback(
         await _edit(
             callback,
             f"Основну валюту змінено на {updated.currency}.\n\n{_settings_text(updated)}",
-            reply_markup=settings_keyboard(
-                reports_enabled=updated.reports_enabled, currency=updated.currency
-            ),
+            reply_markup=_settings_keyboard(updated),
         )
         return
     if callback_data.action == "timezone" and callback_data.value == "menu":
@@ -680,9 +694,7 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(updated),
-            reply_markup=settings_keyboard(
-                reports_enabled=updated.reports_enabled, currency=updated.currency
-            ),
+            reply_markup=_settings_keyboard(updated),
         )
         return
     await callback.answer("Невідома дія.", show_alert=True)

@@ -58,6 +58,27 @@ def pending_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def confirmed_transactions_keyboard(message_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Виправити",
+                    callback_data=TransactionActionCallback(
+                        action="replace", message_id=message_id
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="↩️ Скасувати",
+                    callback_data=TransactionActionCallback(
+                        action="undo", message_id=message_id
+                    ).pack(),
+                ),
+            ]
+        ]
+    )
+
+
 def planned_expense_confirmation_keyboard(planned_expense_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -316,6 +337,7 @@ __all__ = [
     "clarification_keyboard",
     "budget_status_keyboard",
     "category_choice_keyboard",
+    "confirmed_transactions_keyboard",
     "pending_transactions_keyboard",
     "planned_expense_confirmation_keyboard",
     "planned_expense_edit_cancel_keyboard",

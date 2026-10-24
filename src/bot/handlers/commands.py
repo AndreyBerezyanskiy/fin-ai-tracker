@@ -39,6 +39,7 @@ from bot.keyboards import (
     budget_status_keyboard,
     category_choice_keyboard,
     clarification_keyboard,
+    confirmed_transactions_keyboard,
     pending_transactions_keyboard,
     planned_expense_confirmation_keyboard,
     planned_expense_edit_cancel_keyboard,
@@ -498,13 +499,17 @@ async def reports_off_command(
 
 async def settings_command(message: Message, household: Household) -> None:
     reports = "увімкнені" if household.reports_enabled else "вимкнені"
+    auto_confirm = "увімкнене" if household.auto_confirm_transactions else "вимкнене"
     await message.answer(
         "Налаштування групи\n"
         f"Валюта: {household.currency}\n"
         f"Часовий пояс: {household.timezone}\n"
-        f"Автоматичні звіти: {reports}",
+        f"Автоматичні звіти: {reports}\n"
+        f"Автододавання операцій: {auto_confirm}",
         reply_markup=settings_keyboard(
-            reports_enabled=household.reports_enabled, currency=household.currency
+            reports_enabled=household.reports_enabled,
+            auto_confirm_transactions=household.auto_confirm_transactions,
+            currency=household.currency,
         ),
     )
 
@@ -575,6 +580,59 @@ def _format_transactions(
     if balance is not None:
         lines.extend(["", f"Залишок: {_format_balance(balance, household.currency)}"])
     return "\n".join(lines)
+
+
+async def _set_transaction_reaction(
+    message: Message,
+    household: Household,
+    telegram_message_id: int,
+    *,
+    enabled: bool,
+) -> None:
+    try:
+        bot = message.bot
+    except (AttributeError, RuntimeError):
+        return
+    try:
+        await bot.set_message_reaction(
+            chat_id=household.telegram_chat_id,
+            message_id=telegram_message_id,
+            reaction=[ReactionTypeEmoji(emoji="👍")] if enabled else [],
+            is_big=enabled,
+        )
+    except TelegramAPIError:
+        logger.warning(
+            "Could not update transaction reaction: chat_ref=%s message_id=%s",
+            pseudonymize(household.telegram_chat_id),
+            telegram_message_id,
+        )
+
+
+async def _answer_confirmed_transactions(
+    message: Message,
+    *,
+    household: Household,
+    transaction_service: TransactionService,
+    transactions: tuple[object, ...],
+    telegram_message_id: int,
+    title_prefix: str = "✅ Додано",
+) -> None:
+    balance = await transaction_service.confirmed_balance(
+        household_id=household.id, currency=household.currency
+    )
+    count = len(transactions)
+    await message.answer(
+        _format_transactions(
+            transactions,
+            household,
+            title=f"{title_prefix} {count} {_operation_word(count)}",
+            balance=balance,
+        ),
+        reply_markup=confirmed_transactions_keyboard(telegram_message_id),
+    )
+    await _set_transaction_reaction(
+        message, household, telegram_message_id, enabled=True
+    )
 
 
 def _format_planned_expense(
@@ -1197,17 +1255,31 @@ async def recognize_plain_message(
                     reply_markup=planned_expense_confirmation_keyboard(plan.id),
                 )
             return
-        pending = await transaction_service.create_pending(
+        create = (
+            transaction_service.create_confirmed
+            if household.auto_confirm_transactions
+            else transaction_service.create_pending
+        )
+        transactions = await create(
             household=household,
             member=member,
             telegram_message_id=message.message_id,
             original_text=text if store_original_text else "",
             recognition=result,
         )
-        await message.answer(
-            _format_transactions(pending, household),
-            reply_markup=pending_transactions_keyboard(message.message_id),
-        )
+        if household.auto_confirm_transactions:
+            await _answer_confirmed_transactions(
+                message,
+                household=household,
+                transaction_service=transaction_service,
+                transactions=transactions,
+                telegram_message_id=message.message_id,
+            )
+        else:
+            await message.answer(
+                _format_transactions(transactions, household),
+                reply_markup=pending_transactions_keyboard(message.message_id),
+            )
     finally:
         if processing_message is not None:
             try:
@@ -1237,6 +1309,20 @@ async def _resolve_clarification(
     category_service: CategoryService | None,
     store_original_text: bool,
 ) -> None:
+    if clarification.kind == "transaction_replace":
+        await _resolve_transaction_replace(
+            message,
+            answer=answer,
+            clarification=clarification,
+            household=household,
+            member=member,
+            transaction_recognition_service=transaction_recognition_service,
+            transaction_service=transaction_service,
+            clarification_service=clarification_service,
+            category_service=category_service,
+            store_original_text=store_original_text,
+        )
+        return
     processing_message: Message | None = None
     try:
         processing_message = await message.answer("⏳ Обробляю уточнення…")
@@ -1309,7 +1395,12 @@ async def _resolve_clarification(
                 )
             return
 
-        pending = await transaction_service.create_pending(
+        create = (
+            transaction_service.create_confirmed
+            if household.auto_confirm_transactions
+            else transaction_service.create_pending
+        )
+        transactions = await create(
             household=household,
             member=member,
             telegram_message_id=clarification.original_message_id,
@@ -1327,12 +1418,21 @@ async def _resolve_clarification(
                 alias=clarification.ambiguous_member_name,
             )
         await clarification_service.cancel(clarification.id)
-        await message.answer(
-            _format_transactions(pending, household),
-            reply_markup=pending_transactions_keyboard(
-                clarification.original_message_id
-            ),
-        )
+        if household.auto_confirm_transactions:
+            await _answer_confirmed_transactions(
+                message,
+                household=household,
+                transaction_service=transaction_service,
+                transactions=transactions,
+                telegram_message_id=clarification.original_message_id,
+            )
+        else:
+            await message.answer(
+                _format_transactions(transactions, household),
+                reply_markup=pending_transactions_keyboard(
+                    clarification.original_message_id
+                ),
+            )
     except Exception as error:
         logger.warning("AI clarification unavailable: error_type=%s", type(error).__name__)
         await message.answer(AI_UNAVAILABLE_MESSAGE)
@@ -1345,6 +1445,108 @@ async def _resolve_clarification(
                     "Could not delete clarification indicator: message_id=%s",
                     processing_message.message_id,
                 )
+
+
+async def _resolve_transaction_replace(
+    message: Message,
+    *,
+    answer: str,
+    clarification: TransactionClarification,
+    household: Household,
+    member: Member,
+    transaction_recognition_service: TransactionRecognitionService,
+    transaction_service: TransactionService,
+    clarification_service: ClarificationService,
+    category_service: CategoryService | None,
+    store_original_text: bool,
+) -> None:
+    processing_message: Message | None = None
+    try:
+        processing_message = await message.answer("⏳ Перевіряю виправлення…")
+        first_attempt = clarification.replacement_message_id is None
+        replacement_message_id = (
+            message.message_id
+            if first_attempt
+            else clarification.replacement_message_id
+        )
+        if first_attempt:
+            correction_text = answer
+            result = await transaction_recognition_service.recognize(
+                message=correction_text,
+                household=household,
+                member=member,
+            )
+        else:
+            correction_text = clarification.original_text
+            result = await transaction_recognition_service.recognize(
+                message=correction_text,
+                household=household,
+                member=member,
+                clarification_question=clarification.question,
+                clarification_answer=answer,
+            )
+
+        if result.intent is not RecognitionIntent.CREATE_TRANSACTIONS or result.needs_clarification:
+            if clarification.attempts + 1 >= MAX_CLARIFICATION_ATTEMPTS:
+                await clarification_service.cancel(clarification.id)
+                await message.answer(
+                    "Не вдалося розпізнати виправлення. Початкова операція не змінена."
+                )
+                return
+            question = (
+                result.clarification_question
+                if result.needs_clarification
+                else "Надішліть виправлений список уже здійснених операцій повністю."
+            )
+            updated = await clarification_service.advance(
+                clarification.id,
+                question=question,
+                missing_category_type=result.missing_category_type,
+                original_text=correction_text,
+                replacement_message_id=replacement_message_id,
+            )
+            if updated is not None:
+                await _answer_clarification_question(
+                    message,
+                    clarification=updated,
+                    household=household,
+                    category_service=category_service,
+                )
+            return
+
+        replacement = await transaction_service.replace_confirmed_batch(
+            household=household,
+            member=member,
+            telegram_message_id=clarification.original_message_id,
+            replacement_message_id=replacement_message_id,
+            original_text=correction_text if store_original_text else "",
+            recognition=result,
+        )
+        if not replacement.changed:
+            await clarification_service.cancel(clarification.id)
+            await message.answer("Початкову операцію вже змінено або скасовано.")
+            return
+        await clarification_service.cancel(clarification.id)
+        await _set_transaction_reaction(
+            message, household, clarification.original_message_id, enabled=False
+        )
+        await _answer_confirmed_transactions(
+            message,
+            household=household,
+            transaction_service=transaction_service,
+            transactions=replacement.transactions,
+            telegram_message_id=replacement_message_id,
+            title_prefix="✅ Виправлено",
+        )
+    except Exception as error:
+        logger.warning("Transaction replacement failed: error_type=%s", type(error).__name__)
+        await message.answer(AI_UNAVAILABLE_MESSAGE)
+    finally:
+        if processing_message is not None:
+            try:
+                await processing_message.delete()
+            except TelegramAPIError:
+                logger.warning("Could not delete transaction replacement indicator")
 
 
 async def cancel_clarification_command(
@@ -1541,7 +1743,71 @@ async def transaction_callback(
     callback_data: TransactionActionCallback,
     household: Household,
     transaction_service: TransactionService,
+    member: Member | None = None,
+    clarification_service: ClarificationService | None = None,
 ) -> None:
+    if callback_data.action == "undo":
+        if member is None:
+            await callback.answer("Не вдалося визначити автора.", show_alert=True)
+            return
+        result = await transaction_service.cancel_confirmed_batch(
+            household_id=household.id,
+            member_id=member.id,
+            telegram_message_id=callback_data.message_id,
+        )
+        if not result.changed:
+            await callback.answer(
+                "Операцію вже скасовано або вона належить іншому учаснику.",
+                show_alert=True,
+            )
+            return
+        count = len(result.transactions)
+        if callback.message is not None:
+            await callback.message.edit_text(
+                _format_transactions(
+                    result.transactions,
+                    household,
+                    title=f"❌ Скасовано {count} {_operation_word(count)}",
+                ),
+                reply_markup=None,
+            )
+            await _set_transaction_reaction(
+                callback.message,
+                household,
+                callback_data.message_id,
+                enabled=False,
+            )
+        await callback.answer("❌ Скасовано")
+        return
+
+    if callback_data.action == "replace":
+        if member is None or clarification_service is None:
+            await callback.answer("Виправлення недоступне.", show_alert=True)
+            return
+        transactions = await transaction_service.get_confirmed_batch(
+            household_id=household.id,
+            member_id=member.id,
+            telegram_message_id=callback_data.message_id,
+        )
+        if not transactions:
+            await callback.answer(
+                "Операцію вже змінено або вона належить іншому учаснику.",
+                show_alert=True,
+            )
+            return
+        await clarification_service.begin_transaction_replace(
+            household_id=household.id,
+            member_id=member.id,
+            telegram_message_id=callback_data.message_id,
+        )
+        if callback.message is not None:
+            await callback.message.answer(
+                "✏️ Надішліть виправлений список операцій повністю.\n"
+                "Початковий запис залишиться активним, доки виправлення не буде додано."
+            )
+        await callback.answer()
+        return
+
     status_by_action = {
         "confirm": TransactionStatus.CONFIRMED,
         "cancel": TransactionStatus.CANCELLED,
@@ -1623,14 +1889,16 @@ async def undo_command(
     member: Member,
     transaction_service: TransactionService,
 ) -> None:
-    transaction = await transaction_service.undo_last(
+    transactions = await transaction_service.undo_last(
         household_id=household.id,
         member_id=member.id,
     )
-    if transaction is None:
+    if not transactions:
         await message.answer("Немає підтвердженої операції для скасування.")
         return
-    await message.answer(f"Скасовано: {_format_transaction_line(transaction)}")
+    lines = [f"Скасовано {len(transactions)} {_operation_word(len(transactions))}:"]
+    lines.extend(_format_transaction_line(item) for item in transactions)
+    await message.answer("\n".join(lines))
 
 
 def _uncategorized_text(transactions: tuple[object, ...]) -> str:

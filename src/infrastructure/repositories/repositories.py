@@ -556,6 +556,7 @@ class TransactionClarificationRepository:
         missing_category_type: str | None,
         kind: str = "transaction",
         planned_expense_id: int | None = None,
+        replacement_message_id: int | None = None,
     ) -> TransactionClarification:
         values = {
             "household_id": household_id,
@@ -571,6 +572,7 @@ class TransactionClarificationRepository:
             "awaiting_category_name": False,
             "kind": kind,
             "planned_expense_id": planned_expense_id,
+            "replacement_message_id": replacement_message_id,
         }
         statement = (
             insert(TransactionClarification)
@@ -597,6 +599,8 @@ class TransactionClarificationRepository:
         awaiting_category_name: bool = False,
         kind: str | None = None,
         planned_expense_id: int | None = None,
+        original_text: str | None = None,
+        replacement_message_id: int | None = None,
     ) -> TransactionClarification:
         clarification.question = question
         clarification.attempts = attempts
@@ -609,6 +613,10 @@ class TransactionClarificationRepository:
             clarification.kind = kind
         if planned_expense_id is not None:
             clarification.planned_expense_id = planned_expense_id
+        if original_text is not None:
+            clarification.original_text = original_text
+        if replacement_message_id is not None:
+            clarification.replacement_message_id = replacement_message_id
         await self.session.flush()
         return clarification
 
@@ -1035,12 +1043,11 @@ class TransactionRepository:
         )
         return dict(rows.all())
 
-    async def cancel_last_confirmed(
+    async def latest_confirmed_message_id(
         self, *, household_id: int, member_id: int
-    ) -> Transaction | None:
-        transaction = await self.session.scalar(
-            select(Transaction)
-            .options(selectinload(Transaction.member), selectinload(Transaction.beneficiary))
+    ) -> int | None:
+        return await self.session.scalar(
+            select(Transaction.telegram_message_id)
             .where(
                 Transaction.household_id == household_id,
                 Transaction.member_id == member_id,
@@ -1048,11 +1055,7 @@ class TransactionRepository:
             )
             .order_by(Transaction.updated_at.desc(), Transaction.id.desc())
             .limit(1)
-            .with_for_update()
         )
-        if transaction is None:
-            return None
-        return await self.set_status(transaction, TransactionStatus.CANCELLED)
 
     async def set_status(self, transaction: Transaction, status: TransactionStatus) -> Transaction:
         transaction.status = status

@@ -30,6 +30,43 @@ class TransactionService:
         original_text: str,
         recognition: RecognitionResult,
     ) -> tuple[Transaction, ...]:
+        return await self._create(
+            household=household,
+            member=member,
+            telegram_message_id=telegram_message_id,
+            original_text=original_text,
+            recognition=recognition,
+            status=TransactionStatus.PENDING,
+        )
+
+    async def create_confirmed(
+        self,
+        *,
+        household: Household,
+        member: Member,
+        telegram_message_id: int,
+        original_text: str,
+        recognition: RecognitionResult,
+    ) -> tuple[Transaction, ...]:
+        return await self._create(
+            household=household,
+            member=member,
+            telegram_message_id=telegram_message_id,
+            original_text=original_text,
+            recognition=recognition,
+            status=TransactionStatus.CONFIRMED,
+        )
+
+    async def _create(
+        self,
+        *,
+        household: Household,
+        member: Member,
+        telegram_message_id: int,
+        original_text: str,
+        recognition: RecognitionResult,
+        status: TransactionStatus,
+    ) -> tuple[Transaction, ...]:
         if member.household_id != household.id:
             raise ValueError("member does not belong to household")
         async with session_scope(self.session_factory) as session:
@@ -56,6 +93,7 @@ class TransactionService:
                     telegram_chat_id=household.telegram_chat_id,
                     telegram_message_id=telegram_message_id,
                     message_transaction_index=index,
+                    status=status,
                     ai_metadata=recognition.ai_metadata,
                 )
             return tuple(
@@ -87,6 +125,97 @@ class TransactionService:
             for transaction in transactions:
                 await repository.set_status(transaction, status)
             return BatchTransitionResult(tuple(transactions), changed=True)
+
+    async def get_confirmed_batch(
+        self, *, household_id: int, member_id: int, telegram_message_id: int
+    ) -> tuple[Transaction, ...]:
+        async with self.session_factory() as session:
+            transactions = await TransactionRepository(session).lock_by_telegram_message(
+                household_id=household_id,
+                telegram_message_id=telegram_message_id,
+            )
+            if not transactions or any(
+                item.member_id != member_id or item.status is not TransactionStatus.CONFIRMED
+                for item in transactions
+            ):
+                return ()
+            return tuple(transactions)
+
+    async def cancel_confirmed_batch(
+        self, *, household_id: int, member_id: int, telegram_message_id: int
+    ) -> BatchTransitionResult:
+        async with session_scope(self.session_factory) as session:
+            repository = TransactionRepository(session)
+            transactions = await repository.lock_by_telegram_message(
+                household_id=household_id,
+                telegram_message_id=telegram_message_id,
+            )
+            if not transactions or any(
+                item.member_id != member_id or item.status is not TransactionStatus.CONFIRMED
+                for item in transactions
+            ):
+                return BatchTransitionResult(tuple(transactions), changed=False)
+            for transaction in transactions:
+                await repository.set_status(transaction, TransactionStatus.CANCELLED)
+            return BatchTransitionResult(tuple(transactions), changed=True)
+
+    async def replace_confirmed_batch(
+        self,
+        *,
+        household: Household,
+        member: Member,
+        telegram_message_id: int,
+        replacement_message_id: int,
+        original_text: str,
+        recognition: RecognitionResult,
+    ) -> BatchTransitionResult:
+        if member.household_id != household.id:
+            raise ValueError("member does not belong to household")
+        async with session_scope(self.session_factory) as session:
+            repository = TransactionRepository(session)
+            previous = await repository.lock_by_telegram_message(
+                household_id=household.id,
+                telegram_message_id=telegram_message_id,
+            )
+            if not previous or any(
+                item.member_id != member.id or item.status is not TransactionStatus.CONFIRMED
+                for item in previous
+            ):
+                return BatchTransitionResult(tuple(previous), changed=False)
+
+            categories = {
+                category.code: category
+                for category in await CategoryRepository(session).list_available(household.id)
+            }
+            for index, recognized in enumerate(recognition.transactions):
+                category = categories.get(recognized.category_code)
+                if category is None or category.type is not recognized.type:
+                    raise ValueError("recognized category is not available to household")
+                await repository.create_idempotent(
+                    household_id=household.id,
+                    member_id=member.id,
+                    beneficiary_member_id=recognized.beneficiary_member_id or member.id,
+                    category_id=category.id,
+                    transaction_type=recognized.type,
+                    amount=recognized.amount,
+                    currency=recognized.currency,
+                    description=recognized.description,
+                    transaction_date=recognized.transaction_date,
+                    original_text=original_text,
+                    telegram_chat_id=household.telegram_chat_id,
+                    telegram_message_id=replacement_message_id,
+                    message_transaction_index=index,
+                    status=TransactionStatus.CONFIRMED,
+                    ai_metadata=recognition.ai_metadata,
+                )
+            replacement = await repository.get_by_telegram_message(
+                household.telegram_chat_id, replacement_message_id
+            )
+            if not replacement:
+                return BatchTransitionResult(tuple(previous), changed=False)
+            for transaction in previous:
+                await repository.set_status(transaction, TransactionStatus.CANCELLED)
+            return BatchTransitionResult(tuple(replacement), changed=True)
 
     async def list_recent(
         self, *, household_id: int, limit: int = 5, currency: str | None = None
@@ -139,12 +268,30 @@ class TransactionService:
                 household_id, currency=currency
             )
 
-    async def undo_last(self, *, household_id: int, member_id: int) -> Transaction | None:
+    async def undo_last(
+        self, *, household_id: int, member_id: int
+    ) -> tuple[Transaction, ...]:
         async with session_scope(self.session_factory) as session:
-            return await TransactionRepository(session).cancel_last_confirmed(
+            repository = TransactionRepository(session)
+            message_id = await repository.latest_confirmed_message_id(
                 household_id=household_id,
                 member_id=member_id,
             )
+            if message_id is None:
+                return ()
+            transactions = await repository.lock_by_telegram_message(
+                household_id=household_id,
+                telegram_message_id=message_id,
+            )
+            confirmed = tuple(
+                item
+                for item in transactions
+                if item.member_id == member_id
+                and item.status is TransactionStatus.CONFIRMED
+            )
+            for transaction in confirmed:
+                await repository.set_status(transaction, TransactionStatus.CANCELLED)
+            return confirmed
 
 
 __all__ = ["BatchTransitionResult", "TransactionService"]

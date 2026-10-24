@@ -49,6 +49,7 @@ class ClarificationService:
         missing_category_type: TransactionType | None = None,
         kind: str = "transaction",
         planned_expense_id: int | None = None,
+        replacement_message_id: int | None = None,
     ) -> TransactionClarification:
         async with self.session_factory() as session, session.begin():
             return await TransactionClarificationRepository(session).upsert(
@@ -66,6 +67,7 @@ class ClarificationService:
                 ),
                 kind=kind,
                 planned_expense_id=planned_expense_id,
+                replacement_message_id=replacement_message_id,
             )
 
     async def begin_plan_postpone(
@@ -112,6 +114,22 @@ class ClarificationService:
             planned_expense_id=planned_expense_id,
         )
 
+    async def begin_transaction_replace(
+        self,
+        *,
+        household_id: int,
+        member_id: int,
+        telegram_message_id: int,
+    ) -> TransactionClarification:
+        return await self.begin(
+            household_id=household_id,
+            member_id=member_id,
+            original_message_id=telegram_message_id,
+            original_text="",
+            question="Надішліть виправлений список операцій повністю.",
+            kind="transaction_replace",
+        )
+
     async def advance(
         self,
         clarification_id: int,
@@ -121,6 +139,8 @@ class ClarificationService:
         suggested_member_id: int | None = None,
         missing_category_type: TransactionType | None = None,
         awaiting_category_name: bool = False,
+        original_text: str | None = None,
+        replacement_message_id: int | None = None,
     ) -> TransactionClarification | None:
         async with self.session_factory() as session, session.begin():
             repository = TransactionClarificationRepository(session)
@@ -143,6 +163,8 @@ class ClarificationService:
                     missing_category_type.value if missing_category_type is not None else None
                 ),
                 awaiting_category_name=awaiting_category_name,
+                original_text=original_text,
+                replacement_message_id=replacement_message_id,
             )
 
     async def request_category_name(self, clarification_id: int) -> TransactionClarification | None:

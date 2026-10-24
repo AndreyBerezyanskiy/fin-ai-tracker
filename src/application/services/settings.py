@@ -31,6 +31,15 @@ class HouseholdSettingsService:
             await session.flush()
             return household
 
+    async def toggle_auto_confirm_transactions(self, household_id: int) -> Household:
+        async with session_scope(self.session_factory) as session:
+            household = await HouseholdRepository(session).get(household_id)
+            if household is None:
+                raise ValueError("household not found")
+            household.auto_confirm_transactions = not household.auto_confirm_transactions
+            await session.flush()
+            return household
+
     async def set_timezone(self, *, household_id: int, timezone: str) -> Household:
         ZoneInfo(timezone)
         async with session_scope(self.session_factory) as session:

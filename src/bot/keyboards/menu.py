@@ -247,7 +247,9 @@ def month_selection_keyboard(months: Iterable[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard(*, reports_enabled: bool, currency: str = "EUR") -> InlineKeyboardMarkup:
+def settings_keyboard(
+    *, reports_enabled: bool, auto_confirm_transactions: bool = False, currency: str = "EUR"
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -260,6 +262,18 @@ def settings_keyboard(*, reports_enabled: bool, currency: str = "EUR") -> Inline
                 InlineKeyboardButton(
                     text=("🔕 Вимкнути звіти" if reports_enabled else "🔔 Увімкнути звіти"),
                     callback_data=SettingsMenuCallback(action="reports", value="toggle").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "✅ Автододавання операцій"
+                        if auto_confirm_transactions
+                        else "☑️ Увімкнути автододавання"
+                    ),
+                    callback_data=SettingsMenuCallback(
+                        action="auto_confirm", value="toggle"
+                    ).pack(),
                 )
             ],
             [
