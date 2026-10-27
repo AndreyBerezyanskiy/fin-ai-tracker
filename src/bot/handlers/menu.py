@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 
 from aiogram import Router
@@ -48,13 +48,15 @@ from bot.keyboards import (
     main_menu_keyboard,
     month_selection_keyboard,
     planned_expenses_menu_keyboard,
+    report_hour_keyboard,
+    report_minute_keyboard,
     settings_keyboard,
     statistics_result_keyboard,
     stats_menu_keyboard,
     timezone_keyboard,
     uncategorized_transactions_keyboard,
 )
-from domain.enums import TransactionType
+from domain.enums import ReportType, TransactionType
 from infrastructure.database import Category, Household, Member
 
 
@@ -114,11 +116,15 @@ def _recent_months(today: date, count: int = 6) -> tuple[str, ...]:
 def _settings_text(household: Household) -> str:
     reports = "увімкнені" if household.reports_enabled else "вимкнені"
     auto_confirm = "увімкнене" if household.auto_confirm_transactions else "вимкнене"
+    morning_report_time = household.morning_report_time or time(8)
+    evening_report_time = household.evening_report_time or time(20)
     return (
         "Налаштування групи\n"
         f"Валюта: {household.currency}\n"
         f"Часовий пояс: {household.timezone}\n"
         f"Автоматичні звіти: {reports}\n"
+        f"Ранковий звіт: {morning_report_time:%H:%M}\n"
+        f"Вечірній звіт: {evening_report_time:%H:%M}\n"
         f"Автододавання операцій: {auto_confirm}"
     )
 
@@ -128,6 +134,8 @@ def _settings_keyboard(household: Household) -> InlineKeyboardMarkup:
         reports_enabled=household.reports_enabled,
         auto_confirm_transactions=household.auto_confirm_transactions,
         currency=household.currency,
+        morning_report_time=household.morning_report_time or time(8),
+        evening_report_time=household.evening_report_time or time(20),
     )
 
 
@@ -648,6 +656,54 @@ async def settings_menu_callback(
         await _edit(
             callback,
             _settings_text(updated),
+            reply_markup=_settings_keyboard(updated),
+        )
+        return
+    if callback_data.action == "report_time":
+        if callback_data.value not in {ReportType.MORNING.value, ReportType.EVENING.value}:
+            await callback.answer("Некоректний тип звіту.", show_alert=True)
+            return
+        label = "ранкового" if callback_data.value == ReportType.MORNING.value else "вечірнього"
+        await _edit(
+            callback,
+            f"Оберіть годину {label} звіту\nЧасовий пояс: {household.timezone}",
+            reply_markup=report_hour_keyboard(callback_data.value),
+        )
+        return
+    if callback_data.action == "report_hour":
+        try:
+            report_type, hour_text = callback_data.value.split("_", maxsplit=1)
+            hour = int(hour_text)
+            if report_type not in {ReportType.MORNING.value, ReportType.EVENING.value}:
+                raise ValueError
+            time(hour)
+        except ValueError:
+            await callback.answer("Некоректна година звіту.", show_alert=True)
+            return
+        await _edit(
+            callback,
+            "Оберіть точний час",
+            reply_markup=report_minute_keyboard(report_type, hour),
+        )
+        return
+    if callback_data.action == "report_set":
+        try:
+            report_type_text, hour_text, minute_text = callback_data.value.split("_")
+            report_type = ReportType(report_type_text)
+            selected_time = time(int(hour_text), int(minute_text))
+        except ValueError:
+            await callback.answer("Некоректний час звіту.", show_alert=True)
+            return
+        updated = await household_settings_service.set_report_time(
+            household_id=household.id,
+            report_type=report_type,
+            report_time=selected_time,
+        )
+        label = "Ранковий" if report_type is ReportType.MORNING else "Вечірній"
+        await _edit(
+            callback,
+            f"{label} звіт заплановано на {selected_time:%H:%M}.\n\n"
+            f"{_settings_text(updated)}",
             reply_markup=_settings_keyboard(updated),
         )
         return

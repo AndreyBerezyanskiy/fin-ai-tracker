@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -248,7 +248,12 @@ def month_selection_keyboard(months: Iterable[str]) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(
-    *, reports_enabled: bool, auto_confirm_transactions: bool = True, currency: str = "EUR"
+    *,
+    reports_enabled: bool,
+    auto_confirm_transactions: bool = True,
+    currency: str = "EUR",
+    morning_report_time: time = time(8),
+    evening_report_time: time = time(20),
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -262,6 +267,22 @@ def settings_keyboard(
                 InlineKeyboardButton(
                     text=("🔕 Вимкнути звіти" if reports_enabled else "🔔 Увімкнути звіти"),
                     callback_data=SettingsMenuCallback(action="reports", value="toggle").pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"☀️ Ранковий звіт: {morning_report_time:%H:%M}",
+                    callback_data=SettingsMenuCallback(
+                        action="report_time", value="morning"
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🌙 Вечірній звіт: {evening_report_time:%H:%M}",
+                    callback_data=SettingsMenuCallback(
+                        action="report_time", value="evening"
+                    ).pack(),
                 )
             ],
             [
@@ -285,6 +306,53 @@ def settings_keyboard(
             [_menu_button("← Назад", "home")],
         ]
     )
+
+
+def report_hour_keyboard(report_type: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{hour:02d}",
+            callback_data=SettingsMenuCallback(
+                action="report_hour", value=f"{report_type}_{hour:02d}"
+            ).pack(),
+        )
+        for hour in range(24)
+    ]
+    rows = [buttons[index : index + 4] for index in range(0, len(buttons), 4)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← Назад",
+                callback_data=SettingsMenuCallback(action="back", value="settings").pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def report_minute_keyboard(report_type: str, hour: int) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{hour:02d}:{minute:02d}",
+            callback_data=SettingsMenuCallback(
+                action="report_set",
+                value=f"{report_type}_{hour:02d}_{minute:02d}",
+            ).pack(),
+        )
+        for minute in range(60)
+    ]
+    rows = [buttons[index : index + 6] for index in range(0, len(buttons), 6)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="← До вибору години",
+                callback_data=SettingsMenuCallback(
+                    action="report_time", value=report_type
+                ).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def currency_keyboard(*, current_currency: str) -> InlineKeyboardMarkup:
@@ -513,6 +581,8 @@ __all__ = [
     "main_menu_keyboard",
     "month_selection_keyboard",
     "planned_expenses_menu_keyboard",
+    "report_hour_keyboard",
+    "report_minute_keyboard",
     "settings_keyboard",
     "stats_menu_keyboard",
     "statistics_result_keyboard",

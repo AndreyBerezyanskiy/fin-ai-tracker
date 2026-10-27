@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.schedule_events import ScheduleChangeListener
 from domain.currencies import SUPPORTED_CURRENCIES
+from domain.enums import ReportType
 from infrastructure.database import Household, session_scope
 from infrastructure.repositories import HouseholdRepository
 
@@ -38,6 +40,27 @@ class HouseholdSettingsService:
             if household is None:
                 raise ValueError("household not found")
             household.reports_enabled = enabled
+            await session.flush()
+        self._notify_schedule_changed(household)
+        return household
+
+    async def set_report_time(
+        self,
+        *,
+        household_id: int,
+        report_type: ReportType,
+        report_time: time,
+    ) -> Household:
+        async with session_scope(self.session_factory) as session:
+            household = await HouseholdRepository(session).get(household_id)
+            if household is None:
+                raise ValueError("household not found")
+            if report_type is ReportType.MORNING:
+                household.morning_report_time = report_time
+            elif report_type is ReportType.EVENING:
+                household.evening_report_time = report_time
+            else:  # pragma: no cover - exhaustive guard for future enum members
+                raise ValueError("unsupported report type")
             await session.flush()
         self._notify_schedule_changed(household)
         return household

@@ -183,6 +183,25 @@ async def test_scheduler_start_restores_only_event_driven_jobs() -> None:
         scheduler.shutdown()
 
 
+def test_household_time_change_immediately_reschedules_report_job() -> None:
+    target = household()
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(),
+        report_service=SimpleNamespace(),
+    )
+    scheduler.household_changed(target)
+
+    target.evening_report_time = time(21, 30)
+    scheduler.household_changed(target)
+
+    job = scheduler.scheduler.get_job("report:7:evening")
+    assert job is not None
+    assert isinstance(job.trigger, CronTrigger)
+    fields = {field.name: str(field) for field in job.trigger.fields}
+    assert fields["hour"] == "21"
+    assert fields["minute"] == "30"
+
+
 def test_action_cleanup_is_scheduled_once_at_expiration() -> None:
     scheduler = ReportScheduler(
         sender=SimpleNamespace(),

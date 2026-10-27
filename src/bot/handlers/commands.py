@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -517,11 +517,15 @@ async def settings_command(message: Message, household: Household) -> None:
         f"Валюта: {household.currency}\n"
         f"Часовий пояс: {household.timezone}\n"
         f"Автоматичні звіти: {reports}\n"
+        f"Ранковий звіт: {(household.morning_report_time or time(8)):%H:%M}\n"
+        f"Вечірній звіт: {(household.evening_report_time or time(20)):%H:%M}\n"
         f"Автододавання операцій: {auto_confirm}",
         reply_markup=settings_keyboard(
             reports_enabled=household.reports_enabled,
             auto_confirm_transactions=household.auto_confirm_transactions,
             currency=household.currency,
+            morning_report_time=household.morning_report_time or time(8),
+            evening_report_time=household.evening_report_time or time(20),
         ),
     )
 

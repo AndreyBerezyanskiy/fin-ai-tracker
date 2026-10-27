@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
 
@@ -981,6 +981,14 @@ async def test_pending_batch_confirm_last_and_undo_flow(
     toggled_household = await settings_service.toggle_reports(household.id)
     assert toggled_household.reports_enabled is False
     settings_listener.household_changed.assert_called_with(toggled_household)
+    settings_listener.reset_mock()
+    updated_household = await settings_service.set_report_time(
+        household_id=household.id,
+        report_type=ReportType.EVENING,
+        report_time=time(21, 30),
+    )
+    assert updated_household.evening_report_time == time(21, 30)
+    settings_listener.household_changed.assert_called_with(updated_household)
 
     undone = await service.undo_last(household_id=household.id, member_id=member.id)
     assert len(undone) == 2

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -30,7 +30,7 @@ from bot.keyboards import (
     stats_menu_keyboard,
 )
 from domain.category_templates import CategoryTemplate
-from domain.enums import PlannedExpenseStatus, TransactionType
+from domain.enums import PlannedExpenseStatus, ReportType, TransactionType
 from infrastructure.database import Category, Household
 
 
@@ -685,6 +685,105 @@ async def test_settings_callback_toggles_reports() -> None:
 
     service.toggle_reports.assert_awaited_once_with(1)
     assert "Автоматичні звіти: вимкнені" in callback.message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_selects_evening_report_time() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+        reports_enabled=True,
+        morning_report_time=time(8),
+        evening_report_time=time(20),
+    )
+    updated = Household(
+        id=1,
+        telegram_chat_id=-100123,
+        name="Сім’я",
+        currency="EUR",
+        timezone="Europe/Paris",
+        reports_enabled=True,
+        morning_report_time=time(8),
+        evening_report_time=time(21, 30),
+    )
+    service = SimpleNamespace(set_report_time=AsyncMock(return_value=updated))
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="report_time", value="evening"),
+        household,
+        service,
+    )
+    hour_keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    hour_labels = [
+        button.text for row in hour_keyboard.inline_keyboard for button in row
+    ]
+    assert hour_labels[:4] == ["00", "01", "02", "03"]
+    assert "23" in hour_labels
+    assert "Europe/Paris" in callback.message.edit_text.await_args.args[0]
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="report_hour", value="evening_21"),
+        household,
+        service,
+    )
+    minute_keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert [button.text for button in minute_keyboard.inline_keyboard[0]] == [
+        "21:00",
+        "21:01",
+        "21:02",
+        "21:03",
+        "21:04",
+        "21:05",
+    ]
+    assert minute_keyboard.inline_keyboard[9][-1].text == "21:59"
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="report_set", value="evening_21_30"),
+        household,
+        service,
+    )
+
+    service.set_report_time.assert_awaited_once_with(
+        household_id=1,
+        report_type=ReportType.EVENING,
+        report_time=time(21, 30),
+    )
+    text = callback.message.edit_text.await_args.args[0]
+    assert "Вечірній звіт заплановано на 21:30" in text
+    assert "Вечірній звіт: 21:30" in text
+
+
+@pytest.mark.asyncio
+async def test_settings_callback_rejects_forged_report_time() -> None:
+    callback = SimpleNamespace(
+        message=SimpleNamespace(edit_text=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    household = Household(id=1, telegram_chat_id=-100123, name="Сім’я")
+    service = SimpleNamespace(set_report_time=AsyncMock())
+
+    await settings_menu_callback(
+        callback,
+        SettingsMenuCallback(action="report_set", value="evening_21_60"),
+        household,
+        service,
+    )
+
+    callback.answer.assert_awaited_once_with(
+        "Некоректний час звіту.", show_alert=True
+    )
+    service.set_report_time.assert_not_awaited()
+    callback.message.edit_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
