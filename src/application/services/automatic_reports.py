@@ -43,6 +43,10 @@ class AutomaticReportService:
         async with self.session_factory() as session:
             return tuple(await HouseholdRepository(session).list_with_reports_enabled())
 
+    async def household(self, household_id: int) -> Household | None:
+        async with self.session_factory() as session:
+            return await HouseholdRepository(session).get(household_id)
+
     @staticmethod
     def active_slot(household: Household, now: datetime) -> tuple[ReportType, date] | None:
         local_now = now.astimezone(ZoneInfo(household.timezone))
@@ -77,7 +81,7 @@ class AutomaticReportService:
             await sender.send_message(household.telegram_chat_id, text)
         except Exception:
             # An explicit failure means Telegram did not acknowledge delivery. Releasing the
-            # key lets the next scheduler tick retry while the local slot is still active.
+            # key lets the scheduler's bounded one-shot retry claim the delivery again.
             await self._release(household.id, report_type, local_date)
             raise
         return True

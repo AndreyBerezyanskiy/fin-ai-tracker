@@ -4,6 +4,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
@@ -212,6 +213,8 @@ async def test_transaction_action_messages_are_persisted_until_due(
         household_id = household.id
 
     service = TransactionService(service_session_factory)
+    listener = Mock()
+    service.set_schedule_listener(listener)
     expires_at = datetime(2026, 10, 24, 14, 15, tzinfo=UTC)
     await service.remember_action_message(
         household_id=household_id,
@@ -219,6 +222,7 @@ async def test_transaction_action_messages_are_persisted_until_due(
         telegram_message_id=50,
         expires_at=expires_at,
     )
+    listener.action_message_changed.assert_called_once()
 
     assert await service.due_action_messages(expires_at - timedelta(seconds=1)) == ()
     due = await service.due_action_messages(expires_at)
@@ -650,6 +654,8 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
         ),
     )
     service = PlannedExpenseService(factory)
+    schedule_listener = Mock()
+    service.set_schedule_listener(schedule_listener)
     pending = await service.create_pending(
         household=household,
         member=member,
@@ -711,6 +717,7 @@ async def test_planned_expense_reserve_reminder_payment_and_recurrence(
         recurrence=PlannedExpenseRecurrence.MONTHLY,
     )
     assert scheduled is not None
+    schedule_listener.planned_expense_changed.assert_called_with(scheduled)
     budget = await BudgetService(factory).status(
         household_id=household.id,
         currency="EUR",
@@ -963,12 +970,17 @@ async def test_pending_batch_confirm_last_and_undo_flow(
     assert hidden is not None and hidden.is_active is False
 
     settings_service = HouseholdSettingsService(factory)
+    settings_listener = Mock()
+    settings_service.set_schedule_listener(settings_listener)
     updated_household = await settings_service.set_timezone(
         household_id=household.id, timezone="Europe/Kyiv"
     )
     assert updated_household.timezone == "Europe/Kyiv"
+    settings_listener.household_changed.assert_called_with(updated_household)
+    settings_listener.reset_mock()
     toggled_household = await settings_service.toggle_reports(household.id)
     assert toggled_household.reports_enabled is False
+    settings_listener.household_changed.assert_called_with(toggled_household)
 
     undone = await service.undo_last(household_id=household.id, member_id=member.id)
     assert len(undone) == 2

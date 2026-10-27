@@ -190,6 +190,11 @@ sudo --preserve-env=APP_ENV_FILE,COMPOSE_PROJECT_NAME \
 lifecycle polling і стартує лише після успішного запуску Telegram dispatcher. Якщо БД
 недоступна, процес завершується, а `restart: unless-stopped` повторює запуск.
 
+Scheduler є подієвим: під час startup він один раз відновлює Cron/one-shot jobs для
+автоматичних звітів, нагадувань і приховування прострочених кнопок. Між запланованими
+подіями він не опитує PostgreSQL, тому Neon може перейти у scale-to-zero. Зміни
+налаштувань і planned expenses переплановують jobs одразу після успішного commit.
+
 ## 7. Перевірка після запуску
 
 ```bash

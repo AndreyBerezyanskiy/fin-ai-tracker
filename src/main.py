@@ -111,10 +111,12 @@ def create_dispatcher(
             session_factory,
             XlsxFinanceReportRenderer(),
         )
-        dispatcher["household_settings_service"] = HouseholdSettingsService(session_factory)
+        household_settings_service = HouseholdSettingsService(session_factory)
+        dispatcher["household_settings_service"] = household_settings_service
         transaction_service = TransactionService(session_factory)
         dispatcher["transaction_service"] = transaction_service
-        dispatcher["planned_expense_service"] = PlannedExpenseService(session_factory)
+        planned_expense_service = PlannedExpenseService(session_factory)
+        dispatcher["planned_expense_service"] = planned_expense_service
         dispatcher["clarification_service"] = ClarificationService(session_factory)
         ai_usage_service = AIUsageService(session_factory)
         dispatcher["ai_usage_service"] = ai_usage_service
@@ -221,9 +223,20 @@ async def start_bot(settings: Settings | None = None) -> None:
                     ),
                     transaction_service=dispatcher.workflow_data.get("transaction_service"),
                 )
+                household_settings_service = dispatcher.workflow_data.get(
+                    "household_settings_service"
+                )
+                planned_expense_service = dispatcher.workflow_data.get("planned_expense_service")
+                transaction_service = dispatcher.workflow_data.get("transaction_service")
+                if household_settings_service is not None:
+                    household_settings_service.set_schedule_listener(report_scheduler)
+                if planned_expense_service is not None:
+                    planned_expense_service.set_schedule_listener(report_scheduler)
+                if transaction_service is not None:
+                    transaction_service.set_schedule_listener(report_scheduler)
 
                 async def start_scheduler() -> None:
-                    report_scheduler.start()
+                    await report_scheduler.start()
                     logger.info("report_scheduler_started")
 
                 async def stop_scheduler() -> None:

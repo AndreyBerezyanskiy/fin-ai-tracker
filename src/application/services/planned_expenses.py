@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from application.schedule_events import ScheduleChangeListener
 from domain.enums import (
     PlannedExpenseRecurrence,
     PlannedExpenseStatus,
@@ -29,6 +30,14 @@ class ReminderCandidate:
 class PlannedExpenseService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session_factory = session_factory
+        self.schedule_listener: ScheduleChangeListener | None = None
+
+    def set_schedule_listener(self, listener: ScheduleChangeListener) -> None:
+        self.schedule_listener = listener
+
+    def _notify_schedule_changed(self, plan: PlannedExpense) -> None:
+        if self.schedule_listener is not None:
+            self.schedule_listener.planned_expense_changed(plan)
 
     async def create_pending(
         self,
@@ -99,6 +108,7 @@ class PlannedExpenseService:
     ) -> PlannedExpense | None:
         if status not in {PlannedExpenseStatus.SCHEDULED, PlannedExpenseStatus.CANCELLED}:
             raise ValueError("unsupported planned expense transition")
+        updated: PlannedExpense | None = None
         async with session_scope(self.session_factory) as session:
             plan = await PlannedExpenseRepository(session).get_for_household(
                 household_id=household_id, planned_expense_id=planned_expense_id, lock=True
@@ -109,10 +119,14 @@ class PlannedExpenseService:
                 else {PlannedExpenseStatus.PENDING, PlannedExpenseStatus.SCHEDULED}
             )
             if plan is None or plan.status not in allowed_current:
-                return None
-            plan.status = status
-            await session.flush()
-            return plan
+                updated = None
+            else:
+                plan.status = status
+                await session.flush()
+                updated = plan
+        if updated is not None:
+            self._notify_schedule_changed(updated)
+        return updated
 
     async def schedule(
         self,
@@ -121,31 +135,41 @@ class PlannedExpenseService:
         planned_expense_id: int,
         recurrence: PlannedExpenseRecurrence | None,
     ) -> PlannedExpense | None:
+        updated: PlannedExpense | None = None
         async with session_scope(self.session_factory) as session:
             plan = await PlannedExpenseRepository(session).get_for_household(
                 household_id=household_id, planned_expense_id=planned_expense_id, lock=True
             )
             if plan is None or plan.status is not PlannedExpenseStatus.PENDING:
-                return None
-            plan.recurrence = recurrence
-            plan.status = PlannedExpenseStatus.SCHEDULED
-            await session.flush()
-            return plan
+                updated = None
+            else:
+                plan.recurrence = recurrence
+                plan.status = PlannedExpenseStatus.SCHEDULED
+                await session.flush()
+                updated = plan
+        if updated is not None:
+            self._notify_schedule_changed(updated)
+        return updated
 
     async def postpone(
         self, *, household_id: int, planned_expense_id: int, due_date: date
     ) -> PlannedExpense | None:
+        updated: PlannedExpense | None = None
         async with session_scope(self.session_factory) as session:
             repository = PlannedExpenseRepository(session)
             plan = await repository.get_for_household(
                 household_id=household_id, planned_expense_id=planned_expense_id, lock=True
             )
             if plan is None or plan.status is not PlannedExpenseStatus.SCHEDULED:
-                return None
-            plan.due_date = due_date
-            await repository.clear_deliveries(plan.id)
-            await session.flush()
-            return plan
+                updated = None
+            else:
+                plan.due_date = due_date
+                await repository.clear_deliveries(plan.id)
+                await session.flush()
+                updated = plan
+        if updated is not None:
+            self._notify_schedule_changed(updated)
+        return updated
 
     async def update_details(
         self,
@@ -163,6 +187,7 @@ class PlannedExpenseService:
             raise ValueError("planned expense amount must be positive")
         if description is not None and not description.strip():
             raise ValueError("planned expense description must not be empty")
+        updated: PlannedExpense | None = None
         async with session_scope(self.session_factory) as session:
             repository = PlannedExpenseRepository(session)
             plan = await repository.get_for_household(
@@ -172,8 +197,8 @@ class PlannedExpenseService:
                 PlannedExpenseStatus.PENDING,
                 PlannedExpenseStatus.SCHEDULED,
             }:
-                return None
-            if category_id is not None:
+                updated = None
+            elif category_id is not None:
                 category = next(
                     (
                         item
@@ -188,64 +213,88 @@ class PlannedExpenseService:
                     raise ValueError("planned expense category is unavailable")
                 plan.category_id = category.id
                 plan.category = category
-            if amount is not None:
-                plan.amount = amount
-            if due_date is not None and due_date != plan.due_date:
-                plan.due_date = due_date
-                await repository.clear_deliveries(plan.id)
-            if description is not None:
-                plan.description = description.strip()[:500]
-            await session.flush()
-            return plan
+            if plan is not None and plan.status in {
+                PlannedExpenseStatus.PENDING,
+                PlannedExpenseStatus.SCHEDULED,
+            }:
+                if amount is not None:
+                    plan.amount = amount
+                if due_date is not None and due_date != plan.due_date:
+                    plan.due_date = due_date
+                    await repository.clear_deliveries(plan.id)
+                if description is not None:
+                    plan.description = description.strip()[:500]
+                await session.flush()
+                updated = plan
+        if updated is not None:
+            self._notify_schedule_changed(updated)
+        return updated
 
     async def mark_paid(
         self, *, household: Household, planned_expense_id: int, paid_on: date
     ) -> PlannedExpense | None:
+        updated: PlannedExpense | None = None
+        next_plan: PlannedExpense | None = None
         async with session_scope(self.session_factory) as session:
             repository = PlannedExpenseRepository(session)
             plan = await repository.get_for_household(
                 household_id=household.id, planned_expense_id=planned_expense_id, lock=True
             )
             if plan is None or plan.status is not PlannedExpenseStatus.SCHEDULED:
-                return None
-            transaction = Transaction(
-                household_id=plan.household_id,
-                member_id=plan.member_id,
-                beneficiary_member_id=plan.member_id,
-                category_id=plan.category_id,
-                type=TransactionType.EXPENSE,
-                amount=plan.amount,
-                currency=plan.currency,
-                description=plan.description,
-                transaction_date=paid_on,
-                original_text=f"Запланована оплата: {plan.description}",
-                telegram_chat_id=household.telegram_chat_id,
-                telegram_message_id=-plan.id,
-                message_transaction_index=0,
-                status=TransactionStatus.CONFIRMED,
-                ai_metadata={"planned_expense_id": plan.id},
-            )
-            session.add(transaction)
-            await session.flush()
-            plan.transaction_id = transaction.id
-            plan.status = PlannedExpenseStatus.PAID
-            if plan.recurrence is PlannedExpenseRecurrence.MONTHLY:
-                await repository.create(
+                updated = None
+            else:
+                transaction = Transaction(
                     household_id=plan.household_id,
                     member_id=plan.member_id,
+                    beneficiary_member_id=plan.member_id,
                     category_id=plan.category_id,
+                    type=TransactionType.EXPENSE,
                     amount=plan.amount,
                     currency=plan.currency,
                     description=plan.description,
-                    due_date=self._next_month(plan.due_date),
-                    recurrence=plan.recurrence,
-                    original_text=plan.original_text,
-                    telegram_chat_id=None,
-                    telegram_message_id=None,
-                    status=PlannedExpenseStatus.SCHEDULED,
+                    transaction_date=paid_on,
+                    original_text=f"Запланована оплата: {plan.description}",
+                    telegram_chat_id=household.telegram_chat_id,
+                    telegram_message_id=-plan.id,
+                    message_transaction_index=0,
+                    status=TransactionStatus.CONFIRMED,
+                    ai_metadata={"planned_expense_id": plan.id},
                 )
-            await session.flush()
-            return plan
+                session.add(transaction)
+                await session.flush()
+                plan.transaction_id = transaction.id
+                plan.status = PlannedExpenseStatus.PAID
+                if plan.recurrence is PlannedExpenseRecurrence.MONTHLY:
+                    next_plan = await repository.create(
+                        household_id=plan.household_id,
+                        member_id=plan.member_id,
+                        category_id=plan.category_id,
+                        amount=plan.amount,
+                        currency=plan.currency,
+                        description=plan.description,
+                        due_date=self._next_month(plan.due_date),
+                        recurrence=plan.recurrence,
+                        original_text=plan.original_text,
+                        telegram_chat_id=None,
+                        telegram_message_id=None,
+                        status=PlannedExpenseStatus.SCHEDULED,
+                    )
+                    next_plan.household = plan.household
+                await session.flush()
+                updated = plan
+        if updated is not None:
+            self._notify_schedule_changed(updated)
+        if next_plan is not None:
+            self._notify_schedule_changed(next_plan)
+        return updated
+
+    async def scheduled(self) -> tuple[PlannedExpense, ...]:
+        async with self.session_factory() as session:
+            return tuple(await PlannedExpenseRepository(session).list_scheduled())
+
+    async def get_scheduled(self, planned_expense_id: int) -> PlannedExpense | None:
+        async with self.session_factory() as session:
+            return await PlannedExpenseRepository(session).get_scheduled(planned_expense_id)
 
     async def due_reminders(self, now: datetime) -> tuple[ReminderCandidate, ...]:
         async with self.session_factory() as session:

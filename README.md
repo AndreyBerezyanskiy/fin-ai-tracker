@@ -161,6 +161,10 @@ Production deployment використовує окремий Compose-файл, 
 worker healthcheck, автоматичний restart і ротацію логів. Повна покрокова інструкція:
 [docs/deployment.md](docs/deployment.md).
 
+Автоматичні звіти, нагадування та приховування кнопок плануються як точні Cron/one-shot
+jobs. Після restart вони один раз відновлюються з PostgreSQL; хвилинного DB polling немає,
+тож serverless compute може засинати між реальними подіями.
+
 Після першого налаштування повне production-оновлення запускається однією командою:
 
 ```bash

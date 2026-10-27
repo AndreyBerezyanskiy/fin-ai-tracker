@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from apscheduler.triggers.date import DateTrigger
 
 from application.report_scheduler import ReportScheduler
 from application.services import BudgetStatus, PlannedExpenseService, ReminderCandidate
@@ -159,6 +160,42 @@ async def test_scheduler_releases_failed_reminder_for_retry() -> None:
     await scheduler.run_due_reminders(datetime(2026, 10, 12, 8, tzinfo=UTC))
 
     planned_service.release_reminder.assert_awaited_once_with(42, ReminderKind.DUE)
+
+
+def test_scheduled_plan_creates_only_one_shot_reminder_jobs() -> None:
+    target = plan(due_date=date(2026, 10, 12))
+    target.status = PlannedExpenseStatus.SCHEDULED
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(),
+        report_service=SimpleNamespace(),
+        now=lambda: datetime(2026, 10, 10, 6, 0, tzinfo=UTC),
+    )
+
+    scheduler.planned_expense_changed(target)
+
+    jobs = scheduler.scheduler.get_jobs()
+    assert {job.id for job in jobs} == {
+        "reminder:42:day_before",
+        "reminder:42:due",
+        "reminder:42:overdue",
+    }
+    assert all(isinstance(job.trigger, DateTrigger) for job in jobs)
+
+
+def test_cancelling_plan_removes_all_reminder_jobs() -> None:
+    target = plan(due_date=date(2026, 10, 12))
+    target.status = PlannedExpenseStatus.SCHEDULED
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(),
+        report_service=SimpleNamespace(),
+        now=lambda: datetime(2026, 10, 10, 6, 0, tzinfo=UTC),
+    )
+    scheduler.planned_expense_changed(target)
+
+    target.status = PlannedExpenseStatus.CANCELLED
+    scheduler.planned_expense_changed(target)
+
+    assert scheduler.scheduler.get_jobs() == []
 
 
 @pytest.mark.asyncio
@@ -326,9 +363,7 @@ async def test_monthly_plan_requires_explicit_monthly_confirmation() -> None:
 async def test_plan_edit_amount_starts_correlated_clarification() -> None:
     target = plan()
     stored = SimpleNamespace(id=9, question="💶 Яку нову суму встановити?")
-    clarification_service = SimpleNamespace(
-        begin_plan_edit=AsyncMock(return_value=stored)
-    )
+    clarification_service = SimpleNamespace(begin_plan_edit=AsyncMock(return_value=stored))
     callback = SimpleNamespace(
         message=SimpleNamespace(message_id=77, edit_text=AsyncMock()),
         answer=AsyncMock(),

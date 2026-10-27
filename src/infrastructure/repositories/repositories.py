@@ -441,8 +441,8 @@ class TransactionActionMessageRepository:
         telegram_chat_id: int,
         telegram_message_id: int,
         expires_at: datetime,
-    ) -> None:
-        await self.session.execute(
+    ) -> TransactionActionMessage:
+        statement = (
             insert(TransactionActionMessage)
             .values(
                 household_id=household_id,
@@ -453,6 +453,18 @@ class TransactionActionMessageRepository:
             .on_conflict_do_update(
                 constraint="uq_transaction_action_message",
                 set_={"expires_at": expires_at},
+            )
+            .returning(TransactionActionMessage)
+        )
+        return (await self.session.scalars(statement)).one()
+
+    async def list_all(self) -> list[TransactionActionMessage]:
+        return list(
+            await self.session.scalars(
+                select(TransactionActionMessage).order_by(
+                    TransactionActionMessage.expires_at,
+                    TransactionActionMessage.id,
+                )
             )
         )
 
@@ -1208,6 +1220,16 @@ class PlannedExpenseRepository:
         if lock:
             statement = statement.with_for_update()
         return await self.session.scalar(statement)
+
+    async def get_scheduled(self, planned_expense_id: int) -> PlannedExpense | None:
+        return await self.session.scalar(
+            select(PlannedExpense)
+            .options(*self._options())
+            .where(
+                PlannedExpense.id == planned_expense_id,
+                PlannedExpense.status == PlannedExpenseStatus.SCHEDULED,
+            )
+        )
 
     async def list_active(self, household_id: int) -> list[PlannedExpense]:
         return list(

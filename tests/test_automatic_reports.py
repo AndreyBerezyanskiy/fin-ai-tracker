@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from application.report_scheduler import ReportScheduler
 from application.services import AutomaticReportService, BudgetStatus, CategoryBudgetStatus
@@ -153,6 +155,52 @@ def test_reports_show_reserved_and_safe_to_spend_amounts() -> None:
 
     assert "📌 Заплановано: €130.00" in text
     assert "🛡️ Безпечно витратити: €106.00" in text
+
+
+@pytest.mark.asyncio
+async def test_scheduler_start_restores_only_event_driven_jobs() -> None:
+    target = household()
+    report_service = SimpleNamespace(
+        enabled_households=AsyncMock(return_value=(target,)),
+        active_slot=lambda _household, _now: None,
+    )
+    planned_service = SimpleNamespace(scheduled=AsyncMock(return_value=()))
+    transaction_service = SimpleNamespace(pending_action_messages=AsyncMock(return_value=()))
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(),
+        report_service=report_service,
+        planned_expense_service=planned_service,
+        transaction_service=transaction_service,
+        now=lambda: datetime(2026, 10, 8, 5, 0, tzinfo=UTC),
+    )
+
+    await scheduler.start()
+    try:
+        jobs = scheduler.scheduler.get_jobs()
+        assert {job.id for job in jobs} == {"report:7:morning", "report:7:evening"}
+        assert all(isinstance(job.trigger, CronTrigger) for job in jobs)
+    finally:
+        scheduler.shutdown()
+
+
+def test_action_cleanup_is_scheduled_once_at_expiration() -> None:
+    scheduler = ReportScheduler(
+        sender=SimpleNamespace(),
+        report_service=SimpleNamespace(),
+        now=lambda: datetime(2026, 10, 24, 14, 0, tzinfo=UTC),
+    )
+    action = SimpleNamespace(
+        id=9,
+        telegram_chat_id=-100123,
+        telegram_message_id=50,
+        expires_at=datetime(2026, 10, 24, 14, 15, tzinfo=UTC),
+    )
+
+    scheduler.action_message_changed(action)
+
+    job = scheduler.scheduler.get_job("action:-100123:50")
+    assert job is not None
+    assert isinstance(job.trigger, DateTrigger)
 
 
 @pytest.mark.asyncio

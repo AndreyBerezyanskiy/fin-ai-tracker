@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from application.schedule_events import ScheduleChangeListener
 from domain.enums import TransactionStatus
 from domain.models import RecognitionResult
 from infrastructure.database import (
@@ -32,6 +33,10 @@ class BatchTransitionResult:
 class TransactionService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.session_factory = session_factory
+        self.schedule_listener: ScheduleChangeListener | None = None
+
+    def set_schedule_listener(self, listener: ScheduleChangeListener) -> None:
+        self.schedule_listener = listener
 
     async def remember_action_message(
         self,
@@ -42,18 +47,24 @@ class TransactionService:
         expires_at: datetime,
     ) -> None:
         async with session_scope(self.session_factory) as session:
-            await TransactionActionMessageRepository(session).create(
+            action_message = await TransactionActionMessageRepository(session).create(
                 household_id=household_id,
                 telegram_chat_id=telegram_chat_id,
                 telegram_message_id=telegram_message_id,
                 expires_at=expires_at,
             )
+        if self.schedule_listener is not None:
+            self.schedule_listener.action_message_changed(action_message)
 
     async def due_action_messages(
         self, now: datetime
     ) -> tuple[TransactionActionMessage, ...]:
         async with self.session_factory() as session:
             return tuple(await TransactionActionMessageRepository(session).list_due(now))
+
+    async def pending_action_messages(self) -> tuple[TransactionActionMessage, ...]:
+        async with self.session_factory() as session:
+            return tuple(await TransactionActionMessageRepository(session).list_all())
 
     async def complete_action_message(self, action_message_id: int) -> None:
         async with session_scope(self.session_factory) as session:
@@ -66,6 +77,11 @@ class TransactionService:
             await TransactionActionMessageRepository(session).delete_by_message(
                 telegram_chat_id=telegram_chat_id,
                 telegram_message_id=telegram_message_id,
+            )
+        if self.schedule_listener is not None:
+            self.schedule_listener.action_message_removed(
+                telegram_chat_id,
+                telegram_message_id,
             )
 
     async def create_pending(
